@@ -1,0 +1,17 @@
+{
+  "name": "@zan/ingestion",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Владелец миграций общей схемы БД (requests/request_steps/documents) — см. корневой README",
+  "type": "module",
+  "scripts": {
+    "migrate": "node-pg-migrate"
+  },
+  "dependencies": {
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "node-pg-migrate": "^9.0.0"
+  }
+}
