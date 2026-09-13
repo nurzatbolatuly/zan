@@ -8,18 +8,22 @@
 
 - `src/app/[locale]/page.tsx` + `src/components/RequestForm.tsx` — экран запроса: описание
   проблемы (валидация 10–4000 символов, синхронизирована с `CreateRequestDto` backend'а),
-  чекбокс «приложить документ» + тип документа, отправка `POST /requests`. (Путь под
-  `[locale]/` — см. Этап 13 ниже, i18n; на момент Этапа 7 лежал прямо в `src/app/page.tsx`.)
+  чекбокс «приложить документ» + тип документа, отправка `POST /requests`. (Путь под `[locale]/`
+  — см. Этап 13 ниже, i18n; на момент Этапа 7 лежал прямо в `src/app/page.tsx`.) Тот же чекбокс —
+  и в композере продолжения чата (`RequestStatusView.tsx`), не только на первом сообщении (Этап
+  17, §9.13; между этим и Этапом 7 недолго пробовали автоопределение по тексту без чекбокса вообще
+  — Этап 16, §9.12 — откатили в тот же день).
 - `src/app/[locale]/requests/[id]/page.tsx` + `src/components/RequestStatusView.tsx` — экран
-  статуса: поллинг `GET /requests/:id` каждые 2с, пока запрос не завершится
-  (`completed`/`failed`/`needs_clarification`, см. Этап 13).
-- `src/components/PipelineSteps.tsx` — видно, какой агент сейчас работает (по фиксированному
-  порядку search → verification → editor → (document, если запрошен)), с текстом ошибки шага.
-- `src/components/MarkdownAnswer.tsx` — рендерит `resultSummary` от Агента 3 (markdown с
+  статуса: живое обновление через WS (Этап 14, `lib/api.ts:requestEventsUrl`) вместо поллинга —
+  ответ Агента "answer" печатается по мере генерации, а не появляется целиком в конце; поллинг
+  `GET /requests/:id` каждые 2с остаётся фолбэком, если WS не подключился/оборвался раньше
+  paused-статуса (`completed`/`failed`/`needs_clarification`, см. Этап 13).
+- `src/components/MarkdownAnswer.tsx` — рендерит `resultSummary` от Агента "answer" (markdown с
   заголовками и кликабельными ссылками на статьи закона) через `react-markdown` +
   `@tailwindcss/typography`.
 - `src/components/DocumentDownloadButton.tsx` — декодирует `document.content` (base64 DOCX от
-  Агента 4) в `Blob` и скачивает файл прямо в браузере, без отдельного backend-эндпоинта.
+  Агента "document") в `Blob` и скачивает файл прямо в браузере, без отдельного
+  backend-эндпоинта.
 - Персистентный дисклеймер в футере (`src/app/layout.tsx`) — см. INSTRUCTIONS.md, раздел
   "Границы ответственности сервиса".
 
@@ -47,7 +51,7 @@
   (`POST /requests/:id/clarification`); поллинг статуса приостанавливается на время ожидания
   ответа и возобновляется вручную после отправки.
 - **Аналитика (`src/components/AnalyticsView.tsx`, `/[locale]/analytics`)** — простой дашборд
-  над `GET /analytics/topics`: запросы по статусу, среднее время обработки. ("Топ законов" и
+  над `GET /analytics/summary`: запросы по статусу, среднее время обработки. ("Топ законов" и
   доля verified/rejected убраны при пересмотре архитектуры, см. `../PLAN.md` §2.) Цвета
   статусов — из фиксированной статусной палитры скилла dataviz (good/warning/critical), не
   тематизируются; см. комментарий в файле.

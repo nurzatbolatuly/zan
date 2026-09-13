@@ -1,7 +1,15 @@
 export type RequestStatus =
   'pending' | 'processing' | 'needs_clarification' | 'completed' | 'failed' | 'cancelled';
 export type RequestStepStatus = 'pending' | 'running' | 'success' | 'failed';
-export type AgentName = 'search' | 'verification' | 'editor' | 'document';
+/**
+ * До Этапа 15 (2026-09-12, см. INSTRUCTIONS.md §9.10) здесь было 4 значения — 'search' |
+ * 'verification' | 'editor' | 'document': поиск, независимая перепроверка и подготовка ответа
+ * были отдельными LLM-вызовами. Слиты в один — 'answer'. Исторические request_steps старых
+ * запросов, обработанных до этого дня, могут иметь в БД старые значения ('search' и т.д.) — это
+ * просто TEXT-колонка (см. ingestion/migrations/1787130547000_requests.cjs), без БД-миграции;
+ * такие записи не проходят через этот union-тип заново, только читаются как есть.
+ */
+export type AgentName = 'answer' | 'document';
 
 export interface RequestRecord {
   id: string;

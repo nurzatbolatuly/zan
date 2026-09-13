@@ -1,5 +1,5 @@
 import { Inject } from '@nestjs/common';
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import type { Job } from 'bullmq';
 import { createLogger, type Logger } from '@zan/shared';
 import { OrchestratorService } from '../orchestrator/orchestrator.service.js';
@@ -24,5 +24,24 @@ export class RequestProcessingProcessor extends WorkerHost {
   async process(job: Job<RequestProcessingJobData>): Promise<void> {
     this.logger.info({ jobId: job.id, requestId: job.data.requestId }, 'Взял задачу в обработку');
     await this.orchestrator.processRequest(job.data.requestId);
+  }
+
+  /**
+   * Подстраховка, не основной путь логирования: OrchestratorService.processRequest сам ловит и
+   * логирует любую ошибку пайплайна (см. orchestrator.service.ts). Но без этого обработчика
+   * ошибка, долетевшая сюда (например, из самого BullMQ/Redis, а не из пайплайна), просто
+   * помечала бы job "failed" внутри Bull — молча, без единой строки в pino.
+   */
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<RequestProcessingJobData> | undefined, error: Error): void {
+    this.logger.error(
+      {
+        jobId: job?.id,
+        requestId: job?.data.requestId,
+        error: error.message,
+        stack: error.stack,
+      },
+      'Джоба обработки запроса провалена',
+    );
   }
 }

@@ -10,6 +10,7 @@ import { AnalyticsModule } from './analytics/analytics.module.js';
 import { RequestsModule } from './requests/requests.module.js';
 import { OrchestratorModule } from './orchestrator/orchestrator.module.js';
 import { QueueModule } from './queue/queue.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 import { parseRedisConnection } from './common/redis-connection.js';
 
 @Module({
@@ -32,6 +33,7 @@ import { parseRedisConnection } from './common/redis-connection.js';
     RequestsModule,
     OrchestratorModule,
     QueueModule,
+    RealtimeModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

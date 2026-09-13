@@ -67,6 +67,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
           method: request.method,
           path: request.path,
           error: formatError(exception),
+          // Без stack сообщение вроде "Cannot read properties of undefined" не даёт зацепиться
+          // за место в коде — только текст без stack бесполезен для реальной отладки 500-х.
+          stack: exception instanceof Error ? exception.stack : undefined,
         },
         'Необработанная ошибка запроса',
       );

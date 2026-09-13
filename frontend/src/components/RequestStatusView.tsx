@@ -1,17 +1,43 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, cancelRequest, createRequest, fetchRequestDetails } from '../lib/api';
-import type { RequestDetails, RequestStatus } from '../lib/types';
+import {
+  ApiError,
+  cancelRequest,
+  createRequest,
+  fetchRequestDetails,
+  requestDocument,
+  requestEventsUrl,
+} from '../lib/api';
+import type { RequestDetails, RequestEventMessage, RequestStatus } from '../lib/types';
 import { MarkdownAnswer } from './MarkdownAnswer';
 import { DocumentDownloadButton } from './DocumentDownloadButton';
 import { ClarificationForm } from './ClarificationForm';
-import { MIN_QUERY_LENGTH, MAX_QUERY_LENGTH } from './RequestForm';
+import { MIN_QUERY_LENGTH, MAX_QUERY_LENGTH, MAX_DOCUMENT_TYPE_LENGTH } from './RequestForm';
 import { useDictionary } from '../i18n/DictionaryProvider';
 import type { Dictionary } from '../i18n/dictionary';
 
+/**
+ * Этап 14: основной канал обновлений — WS (см. requestEventsUrl в lib/api.ts, RealtimeGateway на
+ * бэкенде), пуш в реальном времени вместо ожидания следующего тика. Этот интервал теперь только
+ * фолбэк — на случай, если WS не смог подключиться или неожиданно оборвался (прокси/файрвол,
+ * блокирующий WS, временный сетевой сбой) — тогда ChatExchange возвращается к старому поведению.
+ */
 const POLL_INTERVAL_MS = 2000;
 const TICK_INTERVAL_MS = 1000;
+
+/**
+ * Этап 18: поллинг прогресса догенерации документа к уже завершённому ответу (см.
+ * requestDocument в lib/api.ts). Общий статус запроса при этом не меняется (остаётся
+ * 'completed', см. backend/src/orchestrator/orchestrator.service.ts
+ * processDocumentOnlyResume) — поэтому основной WS-канал здесь не помогает (сервер уже закрыл
+ * его после снапшота 'completed', см. RealtimeGateway), прогресс отслеживаем отдельным коротким
+ * поллингом именно шага 'document'.
+ */
+const DOCUMENT_POLL_INTERVAL_MS = 2000;
+/** Защита от вечного спиннера, если что-то пошло не так на бэкенде и шаг 'document' так и не
+ *  дошёл до терминального статуса — после этого просто прекращаем ждать. */
+const DOCUMENT_POLL_TIMEOUT_MS = 90_000;
 
 /**
  * Порог для предупреждения "обработка идёт необычно долго" (см. dict.status.stalledWarning) —
@@ -25,9 +51,10 @@ const STALL_WARNING_SECONDS = 90;
 
 /**
  * 'needs_clarification' тоже "не крутится" сам по себе — пайплайн стоит и ждёт ответ
- * пользователя (см. backend/src/orchestrator/orchestrator.service.ts), поэтому поллинг
- * останавливается и там же, а не только на completed/failed; возобновляется вручную через
- * resumePolling() после отправки уточнения (ClarificationForm.onSubmitted).
+ * пользователя (см. backend/src/orchestrator/orchestrator.service.ts). Сервер сам закрывает WS
+ * после снапшота с таким статусом (см. RealtimeGateway.broadcast), а не только на
+ * completed/failed/cancelled; возобновляется вручную через resumeLiveUpdates() после отправки
+ * уточнения (ClarificationForm.onSubmitted).
  */
 function isPaused(status: RequestStatus): boolean {
   return (
@@ -95,15 +122,65 @@ function ChatExchange({
   const [now, setNow] = useState(() => Date.now());
   const [isCancelling, setIsCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  // Потоковый текст финального ответа (см. RequestEventMessage 'token', Агент "answer" —
+  // единственный, кто стримит, см. law-answer.agent.ts). Раньше здесь же стримился и черновик
+  // отдельного Агента 1 (search) — откачено (Этап 15): пользователь видел меняющийся черновик,
+  // который потом переписывался другими агентами, и это подрывало доверие, а не создавало его.
+  // Теперь то, что приходит через 'token', — уже финальный ответ, его больше никто не перепишет.
+  // После completed рендерится уже resultSummary из снапшота (тот же текст), streamingText
+  // сбрасывается.
+  const [streamingText, setStreamingText] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Счётчик поколений запроса: обычный 2с-интервал и poll() из handleCancel могут пересечься —
-  // если ответ интервала прилетит позже ответа на отмену, он не должен затереть более свежее
-  // состояние. Применяем только результат последнего запущенного poll().
+  const wsRef = useRef<WebSocket | null>(null);
+  // Счётчик поколений запроса: обычный поллинг-фолбэк и poll() из handleCancel могут
+  // пересечься — если ответ более старого вызова прилетит позже, он не должен затереть более
+  // свежее состояние. Применяем только результат последнего запущенного poll().
   const pollSeqRef = useRef(0);
   // Поправка на рассинхрон часов клиента с сервером (мс, serverTime - clientTime) — без неё
   // "прошло N сек" и порог "зависания" считались бы от локальных часов клиента напрямую и могли
-  // сработать раньше/позже реального времени обработки при неточных часах устройства.
+  // сработать раньше/позже реального времени обработки при неточных часах устройства. Берётся
+  // только из REST-ответа (заголовок Date) — WS-сообщения его не несут.
   const clockSkewRef = useRef(0);
+  // Актуальный статус для колбэков WS (onclose), которым нужен статус В МОМЕНТ события, а не тот,
+  // что был захвачен замыканием при открытии соединения.
+  const statusRef = useRef<RequestStatus | null>(null);
+
+  // Этап 18: догенерация документа к уже готовому ответу (см. requestDocument в lib/api.ts) —
+  // 'form' показывает поле "какой документ нужен", 'submitting'/'generating' — спиннер.
+  const [docState, setDocState] = useState<'idle' | 'form' | 'submitting' | 'generating'>('idle');
+  const [docType, setDocType] = useState('');
+  const [docError, setDocError] = useState<string | null>(null);
+  const docPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // true, только если мы реально застали шаг 'document' в статусе 'running' — отличает терминальный
+  // статус ИМЕННО этой попытки от уже устаревшего 'failed' с предыдущей (если пользователь
+  // изначально ставил галочку при отправке вопроса, см. §9.13, и та попытка не удалась).
+  const sawDocRunningRef = useRef(false);
+
+  const stopDocPolling = useCallback(() => {
+    if (docPollRef.current) {
+      clearInterval(docPollRef.current);
+      docPollRef.current = null;
+    }
+  }, []);
+
+  const stopPollingFallback = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const applyDetails = useCallback(
+    (data: RequestDetails) => {
+      statusRef.current = data.status;
+      setDetails(data);
+      setLoadError(null);
+      if (data.status !== 'processing') setStreamingText('');
+      onStatusChange?.(data.status);
+      if (isPaused(data.status)) stopPollingFallback();
+    },
+    [onStatusChange, stopPollingFallback],
+  );
 
   const poll = useCallback(async () => {
     const seq = ++pollSeqRef.current;
@@ -114,34 +191,77 @@ function ChatExchange({
       if (serverTimeMs !== null) {
         clockSkewRef.current = serverTimeMs - clientTimeBeforeRequest;
       }
-      setDetails(data);
-      setLoadError(null);
-      onStatusChange?.(data.status);
-      if (isPaused(data.status) && timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      applyDetails(data);
     } catch (err) {
       if (seq !== pollSeqRef.current) return;
       setLoadError(err instanceof ApiError ? err.message : dict.status.loadError);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+      stopPollingFallback();
     }
-  }, [requestId, dict, onStatusChange]);
+  }, [requestId, dict, applyDetails, stopPollingFallback]);
 
-  useEffect(() => {
-    void poll();
+  const startPollingFallback = useCallback(() => {
+    if (timerRef.current) return;
     timerRef.current = setInterval(() => void poll(), POLL_INTERVAL_MS);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
   }, [poll]);
 
+  /**
+   * Открывает WS-канал этого запроса (см. requestEventsUrl). Сервер сам закрывает соединение
+   * сразу после снапшота с paused-статусом (см. RealtimeGateway.broadcast) — это штатное
+   * завершение, а не сбой, поэтому onclose включает поллинг-фолбэк, только если запрос всё ещё
+   * "в полёте" на момент закрытия — иначе событий и не предвидится, поллинг не нужен.
+   */
+  const connectLive = useCallback(() => {
+    if (wsRef.current) return;
+    const ws = new WebSocket(requestEventsUrl(requestId));
+    wsRef.current = ws;
+
+    ws.onmessage = (event) => {
+      let message: RequestEventMessage;
+      try {
+        message = JSON.parse(String(event.data)) as RequestEventMessage;
+      } catch {
+        return;
+      }
+      if (message.type === 'snapshot') {
+        applyDetails(message.data);
+      } else if (message.type === 'token' && message.agentName === 'answer') {
+        setStreamingText((prev) => prev + message.delta);
+      }
+    };
+    ws.onclose = () => {
+      wsRef.current = null;
+      if (statusRef.current && isPaused(statusRef.current)) return;
+      startPollingFallback();
+    };
+  }, [requestId, applyDetails, startPollingFallback]);
+
+  const refreshAndGoLive = useCallback(async () => {
+    await poll();
+    if (statusRef.current && !isPaused(statusRef.current)) connectLive();
+  }, [poll, connectLive]);
+
+  useEffect(() => {
+    void refreshAndGoLive();
+
+    return () => {
+      stopPollingFallback();
+      stopDocPolling();
+      // ws.close() асинхронный — onclose всё равно сработает уже после этой функции. Без
+      // отвязки обработчиков он увидит "соединение оборвалось" (а не намеренное закрытие при
+      // размонтировании) и сам вызовет startPollingFallback() — интервал переживёт компонент
+      // и будет вечно опрашивать бэкенд, обновляя состояние уже нигде не отрендеренного
+      // ChatExchange (утечка, реального бага была замечена при обрыве во время processing).
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [refreshAndGoLive, stopPollingFallback, stopDocPolling]);
+
   // Отдельный, более частый тик (1с) только для счётчика "прошло N сек" в баннере — независимо
-  // от 2-секундного поллинга статуса выше, чтобы счётчик шёл плавно, а не скачками по 2с.
+  // от статуса обновлений выше, чтобы счётчик шёл плавно, а не скачками.
   const status = details?.status;
   useEffect(() => {
     if (!status || !isActivelyProcessing(status)) return;
@@ -149,11 +269,51 @@ function ChatExchange({
     return () => clearInterval(tick);
   }, [status]);
 
-  const resumePolling = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    void poll();
-    timerRef.current = setInterval(() => void poll(), POLL_INTERVAL_MS);
-  }, [poll]);
+  // Пайплайн после needs_clarification/cancelled закрывает WS сам (см. connectLive) — после
+  // отправки уточнения нужно явно обновиться и переоткрыть соединение, а не просто "продолжить
+  // поллинг", как было до Этапа 14.
+  const resumeLiveUpdates = useCallback(() => {
+    stopPollingFallback();
+    void refreshAndGoLive();
+  }, [refreshAndGoLive, stopPollingFallback]);
+
+  // Следит за прогрессом уже запущенной догенерации документа (см. handleDocSubmit) — общий
+  // статус запроса не меняется, поэтому единственный сигнал прогресса — сам шаг 'document' в
+  // очередном снапшоте, полученном обычным поллингом (см. docPollRef).
+  useEffect(() => {
+    if (docState !== 'generating' || !details) return;
+    const documentStep = details.steps.find((s) => s.agentName === 'document');
+    if (documentStep?.status === 'running') sawDocRunningRef.current = true;
+    const isThisAttemptDone =
+      details.document !== null || (documentStep?.status === 'failed' && sawDocRunningRef.current);
+    if (isThisAttemptDone) {
+      stopDocPolling();
+      setDocState('idle');
+      setDocType('');
+    }
+  }, [details, docState, stopDocPolling]);
+
+  async function handleDocSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const trimmedType = docType.trim();
+    if (!trimmedType) return;
+    setDocState('submitting');
+    setDocError(null);
+    try {
+      await requestDocument(requestId, trimmedType);
+      sawDocRunningRef.current = false;
+      setDocState('generating');
+      stopDocPolling();
+      docPollRef.current = setInterval(() => void poll(), DOCUMENT_POLL_INTERVAL_MS);
+      setTimeout(() => {
+        stopDocPolling();
+        setDocState((current) => (current === 'generating' ? 'idle' : current));
+      }, DOCUMENT_POLL_TIMEOUT_MS);
+    } catch (err) {
+      setDocError(err instanceof ApiError ? err.message : dict.form.genericError);
+      setDocState('form');
+    }
+  }
 
   async function handleCancel(): Promise<void> {
     // Необратимое действие в один клик легко нажать случайно — короткое подтверждение стоит того.
@@ -185,6 +345,12 @@ function ChatExchange({
   const activelyProcessing = isActivelyProcessing(details.status);
   const stalled = activelyProcessing && elapsedSeconds >= STALL_WARNING_SECONDS;
 
+  // Причина, по которой шаг document не удался (fail-open, см. runDocumentStep в
+  // orchestrator.service.ts) — null, если документ не запрашивался или удался.
+  const documentFailure = details.steps.find(
+    (s) => s.agentName === 'document' && s.status === 'failed',
+  )?.errorMessage;
+
   const bubbleToneClass =
     details.status === 'failed'
       ? 'border-red-200 bg-red-50 text-red-800'
@@ -211,10 +377,22 @@ function ChatExchange({
         >
           {activelyProcessing && (
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-center gap-2 text-slate-600">
-                <TypingDots />
-                <span>{currentStageLabel(details.steps, dict)}</span>
-              </div>
+              {streamingText ? (
+                // Этап 14/15 — финальный ответ печатается по мере генерации вместо
+                // статус-лейбла (см. connectLive) — пока модель ищёт страницы через web_search,
+                // текста ещё нет, показываем TypingDots ниже; как только она начинает писать
+                // ответ, это уже финальный текст (см. law-answer.agent.ts), его больше никто не
+                // перепишет.
+                <p className="whitespace-pre-wrap text-slate-800">
+                  {streamingText}
+                  <span className="ml-0.5 inline-block w-1.5 animate-pulse">▍</span>
+                </p>
+              ) : (
+                <div className="flex items-center gap-2 text-slate-600">
+                  <TypingDots />
+                  <span>{currentStageLabel(details.steps, dict)}</span>
+                </div>
+              )}
               <p className="text-xs text-slate-400">{dict.status.elapsedLabel(elapsedSeconds)}</p>
               {stalled && (
                 <p className="mt-1 text-xs text-amber-700">{dict.status.stalledWarning}</p>
@@ -228,7 +406,7 @@ function ChatExchange({
               <ClarificationForm
                 requestId={details.id}
                 question={details.clarificationQuestion}
-                onSubmitted={resumePolling}
+                onSubmitted={resumeLiveUpdates}
               />
             </div>
           )}
@@ -240,7 +418,7 @@ function ChatExchange({
             </p>
           )}
 
-          {details.status === 'cancelled' && <p>{dict.status.statusLabel.cancelled}</p>}
+          {details.status === 'cancelled' && <p>{dict.status.cancelledLabel}</p>}
 
           {details.status === 'completed' && details.resultSummary && (
             <div className="flex flex-col gap-3">
@@ -248,6 +426,86 @@ function ChatExchange({
               {details.document && (
                 <div className="border-t border-slate-200 pt-3">
                   <DocumentDownloadButton document={details.document} />
+                </div>
+              )}
+              {/* document — fail-open (см. runDocumentStep в orchestrator.service.ts): основной
+                  ответ уже completed, а причина, по которой документ не готов, лежит в самом
+                  шаге, а не в errorMessage запроса — details.document остаётся null в этом
+                  случае. */}
+              {!details.document && documentFailure && (
+                <p className="border-t border-slate-200 pt-3 text-xs text-amber-700">
+                  {dict.status.documentErrorPrefix(documentFailure)}
+                </p>
+              )}
+
+              {/* Этап 18: догенерация документа к уже готовому ответу — решает рассинхрон, когда
+                  пользователь ставил галочку "приложить документ" не сразу, а уже после того, как
+                  увидел ответ: тут агенту document не нужно, чтобы вопрос пересказывали заново в
+                  композере, он берёт queryText/resultSummary этого же запроса (см.
+                  backend/src/requests/requests.service.ts requestDocument). */}
+              {!details.document && (
+                <div className="border-t border-slate-200 pt-3">
+                  {docState === 'idle' && (
+                    <button
+                      type="button"
+                      onClick={() => setDocState('form')}
+                      className="text-xs font-medium text-blue-600 underline decoration-dotted underline-offset-2 transition hover:text-blue-700"
+                    >
+                      {dict.status.attachDocumentButton}
+                    </button>
+                  )}
+
+                  {docState === 'form' && (
+                    <form
+                      onSubmit={(event) => void handleDocSubmit(event)}
+                      className="flex flex-col gap-1.5"
+                    >
+                      <label
+                        htmlFor={`docType-${details.id}`}
+                        className="text-xs font-medium text-slate-600"
+                      >
+                        {dict.status.attachDocumentTypeLabel}
+                      </label>
+                      <input
+                        id={`docType-${details.id}`}
+                        type="text"
+                        value={docType}
+                        onChange={(event) => setDocType(event.target.value)}
+                        placeholder={dict.form.documentTypePlaceholder}
+                        maxLength={MAX_DOCUMENT_TYPE_LENGTH}
+                        autoFocus
+                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <div className="flex gap-3">
+                        <button
+                          type="submit"
+                          disabled={!docType.trim()}
+                          className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          {dict.status.attachDocumentSubmit}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDocState('idle');
+                            setDocType('');
+                            setDocError(null);
+                          }}
+                          className="text-xs font-medium text-slate-500 underline decoration-dotted underline-offset-2 transition hover:text-slate-700"
+                        >
+                          {dict.status.attachDocumentCancel}
+                        </button>
+                      </div>
+                      {docError && <p className="text-xs text-red-600">{docError}</p>}
+                    </form>
+                  )}
+
+                  {(docState === 'submitting' || docState === 'generating') && (
+                    <div className="flex items-center gap-2 text-xs text-slate-600">
+                      <TypingDots />
+                      <span>{dict.status.attachDocumentGenerating}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -284,12 +542,17 @@ export function RequestStatusView({ requestId }: { requestId: string }) {
   const [requestIds, setRequestIds] = useState<string[]>([requestId]);
   const [latestStatus, setLatestStatus] = useState<RequestStatus | null>(null);
   const [composerText, setComposerText] = useState('');
+  // Чекбокс "приложить документ" живёт и здесь (Этап 17, §9.13) — не только на первом экране
+  // (RequestForm.tsx): любое сообщение в чате, не только первое, может запросить документ.
+  const [includeDocument, setIncludeDocument] = useState(false);
+  const [documentType, setDocumentType] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
 
   const trimmedLength = composerText.trim().length;
   const isComposerTextValid =
     trimmedLength >= MIN_QUERY_LENGTH && composerText.length <= MAX_QUERY_LENGTH;
+  const isDocumentTypeValid = !includeDocument || documentType.trim().length > 0;
   // Пока последний обмен не дошёл до paused-статуса (или ждёт уточнения — это отдельная форма,
   // не новый вопрос), следующее сообщение отправлять рано: бэкенд не хранит контекст между
   // сообщениями, так что параллельная отправка просто запутает пользователя, какой ответ к
@@ -298,7 +561,7 @@ export function RequestStatusView({ requestId }: { requestId: string }) {
     latestStatus === null ||
     isActivelyProcessing(latestStatus) ||
     latestStatus === 'needs_clarification';
-  const canSend = isComposerTextValid && !isSending && !isWaitingForReply;
+  const canSend = isComposerTextValid && isDocumentTypeValid && !isSending && !isWaitingForReply;
 
   async function handleSend(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -309,12 +572,14 @@ export function RequestStatusView({ requestId }: { requestId: string }) {
     try {
       const response = await createRequest({
         queryText: composerText,
-        includeDocument: false,
-        documentType: null,
+        includeDocument,
+        documentType: includeDocument ? documentType.trim() : null,
       });
       setRequestIds((prev) => [...prev, response.id]);
       setLatestStatus(response.status);
       setComposerText('');
+      setIncludeDocument(false);
+      setDocumentType('');
     } catch (err) {
       setSendError(err instanceof ApiError ? err.message : dict.form.genericError);
     } finally {
@@ -354,6 +619,32 @@ export function RequestStatusView({ requestId }: { requestId: string }) {
             {isSending ? dict.form.submitting : dict.form.submit}
           </button>
         </div>
+
+        <div className="flex items-center gap-2 px-1">
+          <input
+            id="composerIncludeDocument"
+            type="checkbox"
+            checked={includeDocument}
+            onChange={(event) => setIncludeDocument(event.target.checked)}
+            disabled={isWaitingForReply || isSending}
+            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+          />
+          <label htmlFor="composerIncludeDocument" className="text-xs text-slate-600">
+            {dict.form.includeDocumentLabel}
+          </label>
+        </div>
+        {includeDocument && (
+          <input
+            type="text"
+            value={documentType}
+            onChange={(event) => setDocumentType(event.target.value)}
+            placeholder={dict.form.documentTypePlaceholder}
+            maxLength={MAX_DOCUMENT_TYPE_LENGTH}
+            disabled={isWaitingForReply || isSending}
+            className="mx-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100"
+          />
+        )}
+
         {isWaitingForReply && !isSending && (
           <p className="px-1 text-xs text-slate-400">{dict.status.waitingForReplyHint}</p>
         )}

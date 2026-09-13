@@ -42,12 +42,6 @@ export class MetricsService implements OnModuleDestroy {
     registers: [this.registry],
   });
 
-  private readonly verificationConcernsTotal = new Counter({
-    name: 'zan_verification_concerns_total',
-    help: 'Количество замечаний, поднятых Агентом 2 при независимой перепроверке ответа',
-    registers: [this.registry],
-  });
-
   /**
    * Задержка отдельного сырого вызова OpenAI (не шага пайплайна целиком — шаг может включать
    * запись в БД и логирование вокруг вызова, см. zan_pipeline_step_duration_ms). Лейбл `model`
@@ -87,10 +81,6 @@ export class MetricsService implements OnModuleDestroy {
 
   observeRequestCompleted(status: RequestStatus): void {
     this.requestsTotal.inc({ status });
-  }
-
-  observeVerificationReview(concernsCount: number): void {
-    if (concernsCount > 0) this.verificationConcernsTotal.inc(concernsCount);
   }
 
   observeLlmCall(model: string, operation: string, outcome: string, durationMs: number): void {

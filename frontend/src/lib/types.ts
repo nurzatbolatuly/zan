@@ -8,7 +8,9 @@
 export type RequestStatus =
   'pending' | 'processing' | 'needs_clarification' | 'completed' | 'failed' | 'cancelled';
 export type RequestStepStatus = 'pending' | 'running' | 'success' | 'failed';
-export type AgentName = 'search' | 'verification' | 'editor' | 'document';
+/** До Этапа 15 (см. backend/src/agents/agent.types.ts) было 4 значения — search/verification/
+ *  editor слиты в один ('answer'): один вызов LLM вместо трёх последовательных. */
+export type AgentName = 'answer' | 'document';
 
 export interface RequestStepRecord {
   id: string;
@@ -40,7 +42,6 @@ export interface RequestDetails {
   steps: RequestStepRecord[];
   document: DocumentRecord | null;
   createdAt: string;
-  updatedAt: string;
 }
 
 /** Карточка запроса для истории обращений (Этап 13 — личный кабинет, GET /requests). */
@@ -54,8 +55,18 @@ export interface RequestSummary {
   processingMs: number | null;
 }
 
-/** Аналитика по частым темам обращений (Этап 13, GET /analytics/topics). */
+/** Сводная аналитика по обращениям (Этап 13, GET /analytics/summary). */
 export interface AnalyticsSummary {
   requestsByStatus: { status: RequestStatus; count: number }[];
   avgProcessingMs: number | null;
 }
+
+/**
+ * Сообщения WS-канала одного запроса (Этап 14 — см. backend/src/realtime/realtime.gateway.ts).
+ * `snapshot` — тот же shape, что и GET /requests/:id, пушится на каждое изменение статуса
+ * запроса/шага; `token` — кусок потокового текста финального ответа (только Агент "answer",
+ * с web_search, см. backend/src/agents/answer/law-answer.agent.ts).
+ */
+export type RequestEventMessage =
+  | { type: 'snapshot'; data: RequestDetails }
+  | { type: 'token'; agentName: AgentName; delta: string };

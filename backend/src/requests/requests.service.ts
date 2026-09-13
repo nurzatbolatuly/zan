@@ -7,8 +7,10 @@ import {
   type RequestProcessingJobData,
 } from '../queue/queue.constants.js';
 import type { CreateRequestDto } from './dto/create-request.dto.js';
+import type { CreateDocumentDto } from './dto/create-document.dto.js';
 import type { SubmitClarificationDto } from './dto/submit-clarification.dto.js';
 import type { RequestRecord, RequestSummary, RequestWithDetails } from './request.types.js';
+import { REQUEST_EVENTS, type RequestEventsPublisher } from '../realtime/request-events.types.js';
 
 /** История обращений (Этап 13 — личный кабинет): сколько последних запросов сессии показываем. */
 const HISTORY_LIMIT = 50;
@@ -18,6 +20,7 @@ export class RequestsService {
   constructor(
     @Inject(REQUESTS_REPOSITORY) private readonly repo: RequestsRepository,
     @InjectQueue(REQUEST_PROCESSING_QUEUE) private readonly queue: Queue<RequestProcessingJobData>,
+    @Inject(REQUEST_EVENTS) private readonly events: RequestEventsPublisher,
   ) {}
 
   async create(dto: CreateRequestDto, ownerTokenHash: string | null): Promise<RequestRecord> {
@@ -86,6 +89,45 @@ export class RequestsService {
 
     await this.repo.setClarificationAnswer(id, dto.answer);
     await this.repo.updateRequestStatus(id, 'pending');
+    // WS-канал этого requestId уже закрыт (см. RealtimeGateway.broadcast — needs_clarification
+    // paused-статус) — снапшот здесь публиковать некому, фронт переоткрывает подключение сам,
+    // явно, при отправке уточнения (см. RequestStatusView.tsx: resumeLiveUpdates).
+    await this.queue.add('process', { requestId: id });
+  }
+
+  /**
+   * Этап 18 (§9.14): догенерация документа к уже завершённому ответу — пользователь сначала
+   * получил обычный текстовый ответ, а решение приложить документ принял, уже увидев его (не
+   * заранее, через чекбокс в композере, см. create()). Требует status='completed' с непустым
+   * resultSummary — иначе агенту document нечего использовать как готовый ответ по делу (а сам
+   * запрос ещё либо не начинался, либо идёт, либо ждёт уточнения/провалился).
+   * Явно запрещаем повторный вызов, если документ уже есть, — CreateDocumentDto не даёт способа
+   * заменить документ другим типом, только создать первый (см. requests.repository.ts
+   * setDocumentRequested — общий статус запроса не трогается, поэтому WS-канал уже закрыт;
+   * прогресс генерации фронт отслеживает поллингом по request_steps, см. RequestStatusView.tsx).
+   */
+  async requestDocument(
+    id: string,
+    dto: CreateDocumentDto,
+    ownerTokenHash: string | null,
+  ): Promise<void> {
+    const [request, owned] = await Promise.all([
+      this.repo.findRequestWithDetails(id),
+      this.repo.isOwnedBy(id, ownerTokenHash),
+    ]);
+    if (!request || !owned) {
+      throw new NotFoundException('Запрос не найден');
+    }
+    if (request.status !== 'completed' || request.resultSummary === null) {
+      throw new BadRequestException(
+        'Документ можно составить только к уже полученному ответу на вопрос',
+      );
+    }
+    if (request.document) {
+      throw new BadRequestException('Документ для этого ответа уже создан');
+    }
+
+    await this.repo.setDocumentRequested(id, dto.documentType);
     await this.queue.add('process', { requestId: id });
   }
 
@@ -103,5 +145,9 @@ export class RequestsService {
     if (!cancelled) {
       throw new BadRequestException('Запрос уже завершён и не может быть отменён');
     }
+    // Пайплайн сам заметит отмену только между шагами (см. orchestrator.service.ts) — публикуем
+    // снапшот сразу, чтобы открытая вкладка увидела 'cancelled' немедленно, а не только когда
+    // (если) оркестратор доберётся до следующей проверки статуса.
+    await this.events.publishSnapshot(id);
   }
 }

@@ -13,6 +13,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { RequestsService } from './requests.service.js';
 import { CreateRequestDto } from './dto/create-request.dto.js';
+import { CreateDocumentDto } from './dto/create-document.dto.js';
 import { SubmitClarificationDto } from './dto/submit-clarification.dto.js';
 import { validateDto } from '../common/validate-dto.js';
 import { ensureSessionTokenHash, readSessionTokenHash } from '../common/session.js';
@@ -22,7 +23,8 @@ export class RequestsController {
   constructor(@Inject(RequestsService) private readonly service: RequestsService) {}
 
   // Отдельный, более жёсткий лимит, чем глобальный ThrottlerGuard (см. app.module.ts):
-  // каждый POST запускает пайплайн из 4 агентов = минимум 4 платных вызова OpenAI API.
+  // каждый POST запускает пайплайн (Агент "answer" + опционально "document") = минимум 1-2
+  // платных вызова OpenAI API.
   @Throttle({ default: { ttl: 60_000, limit: 5 } })
   @Post()
   async create(
@@ -58,6 +60,22 @@ export class RequestsController {
     const dto = await validateDto(SubmitClarificationDto, body);
     await this.service.submitClarification(id, dto, readSessionTokenHash(req));
     return { id, status: 'pending' };
+  }
+
+  // Этап 18 (§9.14): запускает пайплайн заново тем же способом, что и submitClarification, — тот
+  // же лимит.
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @Post(':id/document')
+  async createDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: unknown,
+    @Req() req: Request,
+  ) {
+    const dto = await validateDto(CreateDocumentDto, body);
+    await this.service.requestDocument(id, dto, readSessionTokenHash(req));
+    // Статус самого запроса не меняется (остаётся 'completed', см. RequestsService.requestDocument) —
+    // прогресс генерации документа фронт отслеживает по request_steps через обычный GET/поллинг.
+    return { id };
   }
 
   @Post(':id/cancel')

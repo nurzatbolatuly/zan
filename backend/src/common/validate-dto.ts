@@ -3,6 +3,16 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 
 /**
+ * `@Transform(trimField)` для строковых полей DTO — общий для всех DTO пакета (см.
+ * CreateRequestDto/CreateDocumentDto/SubmitClarificationDto), раньше был скопирован по одной
+ * копии на файл. Обрезаем пробелы до валидации длины — иначе MinLength пропускает строку из
+ * одних пробелов, а сама строка с пробелами по краям бесполезна для агентов и БД.
+ */
+export function trimField({ value }: { value: unknown }): unknown {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+/**
  * ВАЖНО: не полагаемся на Nest'овский глобальный ValidationPipe с автоматическим выводом
  * типа DTO из параметра контроллера — это требует TypeScript emitDecoratorMetadata
  * (design:paramtypes), а мы запускаем backend через tsx (esbuild), который эту метадату

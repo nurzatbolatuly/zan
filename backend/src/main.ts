@@ -8,6 +8,7 @@ import { config } from './config.js';
 import { AllExceptionsFilter } from './common/all-exceptions.filter.js';
 import { createHttpLoggingMiddleware } from './common/http-logging.middleware.js';
 import { MetricsService } from './metrics/metrics.service.js';
+import { RealtimeGateway } from './realtime/realtime.gateway.js';
 
 const logger = createLogger('backend');
 
@@ -35,6 +36,10 @@ async function bootstrap(): Promise<void> {
   app.use(createHttpLoggingMiddleware(app.get(MetricsService)));
 
   await app.listen(config.port);
+  // Этап 14 — WS-канал состояния запроса живёт на том же HTTP-сервере/порту, что и REST API
+  // (см. realtime/realtime.gateway.ts); привязка возможна только после listen(), пока сервер не
+  // слушает реальный сокет.
+  app.get(RealtimeGateway).attach(app.getHttpServer());
   logger.info({ port: config.port }, 'Backend запущен');
 }
 

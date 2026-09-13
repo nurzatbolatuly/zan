@@ -1,5 +1,10 @@
 import type { ChatClient } from '@zan/shared';
-import { IN_FORCE_LAW_GUARD, PROMPT_INJECTION_GUARD, delimitUserQuery } from '@zan/shared';
+import {
+  createLogger,
+  IN_FORCE_LAW_GUARD,
+  PROMPT_INJECTION_GUARD,
+  delimitUserQuery,
+} from '@zan/shared';
 
 /**
  * Этап 13 (бэклог) — многоходовой диалог, ограниченный ОДНИМ раундом уточнения перед Агентом 1.
@@ -85,15 +90,19 @@ function isClarificationCheckResult(value: unknown): value is ClarificationCheck
  */
 const MIN_WORDS_TO_SKIP_CHECK = 8;
 
+const logger = createLogger('clarification-check');
+
 /**
- * Fail-open по дизайну (в отличие от Агента 2, который fail-closed): если LLM недоступен или
- * вернул невалидный JSON, пайплайн должен продолжиться с исходным вопросом, а не зависнуть в
- * ожидании уточнения из-за технического сбоя — уточнение помогает точности, но не является
- * барьером безопасности вроде проверки существования нормы.
+ * Fail-open по дизайну: если LLM недоступен или вернул невалидный JSON, пайплайн должен
+ * продолжиться с исходным вопросом, а не зависнуть в ожидании уточнения из-за технического
+ * сбоя — уточнение помогает точности, но не является барьером безопасности. Каждый fail-open
+ * ниже логируется (warn) — иначе сбой этого шага (например, OpenAI недоступен) был бы полностью
+ * невидим: пайплайн просто тихо шёл дальше без единой строки в логах.
  */
 export async function checkNeedsClarification(
   chat: ChatClient,
   queryText: string,
+  requestId: string,
 ): Promise<ClarificationCheckResult> {
   if (queryText.trim().split(/\s+/).filter(Boolean).length >= MIN_WORDS_TO_SKIP_CHECK) {
     return { status: 'ready', details: null };
@@ -105,25 +114,45 @@ export async function checkNeedsClarification(
       system: SYSTEM_PROMPT,
       user: `Вопрос пользователя:\n${delimitUserQuery(queryText)}`,
       reasoningEffort: 'low',
+      requestId,
     });
-  } catch {
+  } catch (error) {
+    logger.warn(
+      {
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      'Проверка на уточнение недоступна (LLM) — fail-open, продолжаем без уточнения',
+    );
     return { status: 'ready', details: null };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
-  } catch {
+  } catch (error) {
+    logger.warn(
+      { requestId, error: error instanceof Error ? error.message : String(error) },
+      'Проверка на уточнение вернула невалидный JSON — fail-open, продолжаем без уточнения',
+    );
     return { status: 'ready', details: null };
   }
 
   if (!isClarificationCheckResult(parsed)) {
+    logger.warn(
+      { requestId, raw },
+      'Проверка на уточнение вернула неожиданную структуру — fail-open, продолжаем без уточнения',
+    );
     return { status: 'ready', details: null };
   }
   if (
     (parsed.status === 'needs_clarification' || parsed.status === 'out_of_topic') &&
     !parsed.details
   ) {
+    logger.warn(
+      { requestId, status: parsed.status },
+      'Проверка на уточнение вернула статус без details — fail-open, продолжаем без уточнения',
+    );
     return { status: 'ready', details: null };
   }
   return parsed;

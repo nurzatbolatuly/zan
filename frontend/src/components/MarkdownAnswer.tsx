@@ -12,7 +12,7 @@ const components: Components = {
   ),
 };
 
-/** Агент 3 (editor) отдаёт markdown с заголовками и ссылками на статьи закона (см. backend/src/agents/editor/). */
+/** Агент "answer" отдаёт markdown с заголовками и ссылками на статьи закона (см. backend/src/agents/answer/). */
 export function MarkdownAnswer({ markdown }: { markdown: string }) {
   return (
     <div className="prose prose-slate prose-sm max-w-none prose-a:text-blue-700 prose-a:no-underline hover:prose-a:underline">

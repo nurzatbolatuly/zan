@@ -46,3 +46,37 @@ export function readSessionTokenHash(req: Request): string | null {
   const token = req.cookies?.[SESSION_COOKIE_NAME] as string | undefined;
   return token ? hashSessionToken(token) : null;
 }
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  if (!header) return cookies;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    if (!key) continue;
+    try {
+      // decodeURIComponent бросает URIError на битый percent-encoding (например "%"). Эта
+      // функция — единственный путь чтения cookie для WS upgrade (см.
+      // readSessionTokenHashFromCookieHeader), который не проходит через `cookie-parser`
+      // (уже защищённый от этого) и вызывается синхронно из async handleUpgrade без try/catch
+      // вокруг неё — необработанное исключение там становится unhandled rejection и валит
+      // весь процесс (нет глобального обработчика). Один битый заголовок Cookie от клиента WS
+      // не должен иметь возможность уронить бэкенд целиком — просто пропускаем такую cookie.
+      cookies[key] = decodeURIComponent(part.slice(eq + 1).trim());
+    } catch {
+      continue;
+    }
+  }
+  return cookies;
+}
+
+/**
+ * Как readSessionTokenHash(), но для сырого заголовка `Cookie` — нужен WS upgrade-запросам
+ * (realtime/realtime.gateway.ts, Этап 14), которые не проходят через `cookie-parser`: тот
+ * работает только в обычном Express request-пайплайне, upgrade-событие `http.Server` его минует.
+ */
+export function readSessionTokenHashFromCookieHeader(header: string | undefined): string | null {
+  const token = parseCookieHeader(header)[SESSION_COOKIE_NAME];
+  return token ? hashSessionToken(token) : null;
+}

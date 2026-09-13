@@ -9,7 +9,7 @@ import { useDictionary, useLocale } from '../i18n/DictionaryProvider';
  *  RequestStatusView.tsx), у него та же валидация текста вопроса, что и у этой формы. */
 export const MIN_QUERY_LENGTH = 10;
 export const MAX_QUERY_LENGTH = 4000;
-const MAX_DOCUMENT_TYPE_LENGTH = 200;
+export const MAX_DOCUMENT_TYPE_LENGTH = 200;
 
 export function RequestForm() {
   const router = useRouter();

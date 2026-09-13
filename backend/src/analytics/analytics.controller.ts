@@ -13,8 +13,8 @@ import type { AnalyticsSummary } from './analytics.types.js';
 export class AnalyticsController {
   constructor(@Inject(AnalyticsService) private readonly analytics: AnalyticsService) {}
 
-  @Get('topics')
-  async getTopics(): Promise<AnalyticsSummary> {
+  @Get('summary')
+  async getSummary(): Promise<AnalyticsSummary> {
     return this.analytics.getSummary();
   }
 }

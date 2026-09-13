@@ -1,5 +1,5 @@
 import type { Locale } from './locales';
-import type { AgentName, RequestStatus, RequestStepStatus } from '../lib/types';
+import type { AgentName, RequestStatus } from '../lib/types';
 import { ru } from './dictionaries/ru';
 import { kk } from './dictionaries/kk';
 
@@ -20,11 +20,10 @@ export interface Dictionary {
     genericError: string;
   };
   status: {
-    yourQuestion: string;
-    pipelineProgress: string;
-    /** Общий баннер статуса запроса над списком шагов — отдельно от history/analytics.statusLabel,
-     *  т.к. тут нужны более развёрнутые формулировки ("Обрабатывается…", а не просто "Обрабатывается"). */
-    statusLabel: Record<RequestStatus, string>;
+    /** Единственный статус, для которого чат-пузырь ассистента показывает готовый лейбл вместо
+     *  своего текста (completed/failed/needs_clarification рендерятся отдельными ветками с более
+     *  развёрнутыми формулировками, см. RequestStatusView.tsx). */
+    cancelledLabel: string;
     /** Заглушка "печатает…" в чат-пузыре ассистента, пока ещё не создана запись ни одного шага
      *  пайплайна (джоба только легла в очередь) или между шагами — см. currentStageLabel в
      *  RequestStatusView.tsx. */
@@ -35,8 +34,18 @@ export interface Dictionary {
     elapsedLabel: (seconds: number) => string;
     stalledWarning: string;
     failedPrefix: string;
-    answerHeading: string;
-    documentHeading: string;
+    /** Показывается вместо кнопки скачивания, если шаг document не удался (Этап 17, §9.13) —
+     *  fail-open: сам ответ пользователю уже completed, но документ не готов (например, агент
+     *  решил, что фактов не хватает, см. INSUFFICIENT_CONTEXT_TITLE в law-document.agent.ts). */
+    documentErrorPrefix: (reason: string) => string;
+    /** Этап 18: догенерация документа к уже готовому ответу — кнопка/форма/статус под ответом,
+     *  которая заменила требование пересказывать вопрос заново в композере (см.
+     *  RequestStatusView.tsx, backend requestDocument). */
+    attachDocumentButton: string;
+    attachDocumentTypeLabel: string;
+    attachDocumentSubmit: string;
+    attachDocumentCancel: string;
+    attachDocumentGenerating: string;
     loading: string;
     loadError: string;
     clarificationHeading: string;
@@ -49,15 +58,7 @@ export interface Dictionary {
     cancelError: string;
     cancelConfirm: string;
   };
-  pipeline: Record<AgentName, string> & {
-    /** Показывается над списком шагов, когда verification нашла замечания и Агент 1 переспрашивает
-     *  заново (см. OrchestratorService.runSearchVerificationLoop) — без этого второй раунд визуально
-     *  неотличим от зависания на следующем шаге. */
-    reprocessingNotice: string;
-  };
-  /** Текстовая подпись статуса КАЖДОГО шага пайплайна — иконка/цвет в PipelineSteps.tsx сами по
-   *  себе недостаточно заметны, нужен явный текст "в процессе"/"не начат"/"ошибка". */
-  pipelineStepStatus: Record<RequestStepStatus, string>;
+  pipeline: Record<AgentName, string>;
   document: { download: (title: string) => string; downloadError: string };
   history: {
     heading: string;

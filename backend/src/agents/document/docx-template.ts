@@ -2,10 +2,48 @@ import {
   AlignmentType,
   convertMillimetersToTwip,
   Document,
+  LineRuleType,
   Packer,
   Paragraph,
   TextRun,
+  type IPageMarginAttributes,
+  type IPageSizeAttributes,
+  type IParagraphPropertiesOptions,
+  type IRunStylePropertiesOptions,
 } from 'docx';
+
+/**
+ * Ни одно из этих полей не имеет значения по умолчанию в этом файле — раньше здесь были
+ * захардкожены "стандартные" A4/Times New Roman 14/красная строка 1,25 см/полуторный интервал по
+ * аналогии с общим делопроизводством (ГОСТ Р 7.0.97), но эти цифры никогда не были проверены на
+ * то, что их действительно требует законодательство РК для составляемых сервисом документов
+ * (заявление, претензия, иск и т.п.) — а для большинства из них закон, скорее всего, вообще не
+ * регламентирует визуальное оформление, только структуру/реквизиты.
+ *
+ * Поэтому источник этих значений — не эта функция, а Агент "document" (см. law-document.agent.ts):
+ * когда у него в этом обращении есть инструмент web_search по adilet.zan.kz/zan.gov.kz, он
+ * дополнительно ищет, регламентирует ли закон визуальное оформление для конкретного типа
+ * документа, и заполняет здесь только то, что реально нашёл. Шаблонизатор ничего не предполагает
+ * сам — не заданное поле означает "закон это не регламентирует", и docx применяет свой обычный
+ * дефолт (см. комментарии у каждого поля ниже), а не выдуманное сервисом "типовое" значение.
+ */
+export interface DocumentFormatting {
+  /** Например, "Times New Roman" — если не задано, используется дефолт docx/Word. */
+  fontFamily?: string;
+  /** В pt (например, 14) — если не задано, используется дефолт docx/Word. */
+  fontSizePt?: number;
+  /** Множитель межстрочного интервала (1 — одинарный, 1.5 — полуторный, 2 — двойной). */
+  lineSpacingMultiplier?: number;
+  /** Абзацный отступ первой строки ("красная строка") у пунктов основного текста, в см. */
+  firstLineIndentCm?: number;
+  /** Размер страницы, мм — оба поля обязательны вместе. Дефолт docx уже равен A4 (210×297мм). */
+  pageWidthMm?: number;
+  pageHeightMm?: number;
+  marginTopMm?: number;
+  marginBottomMm?: number;
+  marginLeftMm?: number;
+  marginRightMm?: number;
+}
 
 export interface DocumentTemplateInput {
   title: string;
@@ -13,34 +51,90 @@ export interface DocumentTemplateInput {
   recipientLines: string[];
   /** Пункты основного текста — нумеруются автоматически шаблонизатором. */
   bodyParagraphs: string[];
+  /** См. DocumentFormatting — только то, что агент нашёл в законе, ничего сверх этого. */
+  formatting?: DocumentFormatting;
 }
 
-const A4_WIDTH_MM = 210;
-const A4_HEIGHT_MM = 297;
-const MARGIN_TOP_MM = 20;
-const MARGIN_BOTTOM_MM = 20;
-const MARGIN_LEFT_MM = 30;
-const MARGIN_RIGHT_MM = 15;
+function buildRunDefaults(
+  formatting: DocumentFormatting | undefined,
+): IRunStylePropertiesOptions | undefined {
+  const font = formatting?.fontFamily;
+  const size = formatting?.fontSizePt;
+  if (font === undefined && size === undefined) return undefined;
+  return {
+    ...(font !== undefined ? { font } : {}),
+    // docx использует полупункты (14pt закона → 28).
+    ...(size !== undefined ? { size: Math.round(size * 2) } : {}),
+  };
+}
 
-const FONT = 'Times New Roman';
-/** docx использует полупункты: 14pt = 28. */
-const FONT_SIZE_HALF_POINTS = 28;
+function buildLineSpacing(
+  formatting: DocumentFormatting | undefined,
+): { line: number; lineRule: (typeof LineRuleType)['AUTO'] } | undefined {
+  const multiplier = formatting?.lineSpacingMultiplier;
+  if (multiplier === undefined) return undefined;
+  // OOXML `w:spacing w:line` при lineRule="auto" — в 240-х долях строки (240 = одинарный).
+  return { line: Math.round(240 * multiplier), lineRule: LineRuleType.AUTO };
+}
 
-/**
- * Формальные требования РК к оформлению документов (A4, Times New Roman 14, шапка справа
- * сверху, нумерация пунктов) реализованы здесь программно, а не текстовой просьбой к LLM —
- * так соответствие формату гарантировано независимо от того, что вернула модель (см.
- * "Технологический стек" в ../../../../INSTRUCTIONS.md). LLM отвечает только за содержание:
- * заголовок, шапку и текст пунктов, переданные сюда через DocumentTemplateInput.
- */
+function buildFirstLineIndent(
+  formatting: DocumentFormatting | undefined,
+): IParagraphPropertiesOptions['indent'] {
+  const cm = formatting?.firstLineIndentCm;
+  if (cm === undefined) return undefined;
+  return { firstLine: convertMillimetersToTwip(cm * 10) };
+}
+
+function buildPageSize(
+  formatting: DocumentFormatting | undefined,
+): Partial<IPageSizeAttributes> | undefined {
+  const { pageWidthMm, pageHeightMm } = formatting ?? {};
+  if (pageWidthMm === undefined || pageHeightMm === undefined) return undefined;
+  return {
+    width: convertMillimetersToTwip(pageWidthMm),
+    height: convertMillimetersToTwip(pageHeightMm),
+  };
+}
+
+function buildPageMargin(
+  formatting: DocumentFormatting | undefined,
+): IPageMarginAttributes | undefined {
+  const { marginTopMm, marginBottomMm, marginLeftMm, marginRightMm } = formatting ?? {};
+  if (
+    marginTopMm === undefined &&
+    marginBottomMm === undefined &&
+    marginLeftMm === undefined &&
+    marginRightMm === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(marginTopMm !== undefined ? { top: convertMillimetersToTwip(marginTopMm) } : {}),
+    ...(marginBottomMm !== undefined ? { bottom: convertMillimetersToTwip(marginBottomMm) } : {}),
+    ...(marginLeftMm !== undefined ? { left: convertMillimetersToTwip(marginLeftMm) } : {}),
+    ...(marginRightMm !== undefined ? { right: convertMillimetersToTwip(marginRightMm) } : {}),
+  };
+}
+
 export async function buildDocumentBuffer(input: DocumentTemplateInput): Promise<Buffer> {
+  const lineSpacing = buildLineSpacing(input.formatting);
+  const firstLineIndent = buildFirstLineIndent(input.formatting);
+  const runDefaults = buildRunDefaults(input.formatting);
+  const pageSize = buildPageSize(input.formatting);
+  const pageMargin = buildPageMargin(input.formatting);
+
   const headerParagraphs = input.recipientLines.map(
-    (line) => new Paragraph({ alignment: AlignmentType.RIGHT, children: [new TextRun(line)] }),
+    (line) =>
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        ...(lineSpacing ? { spacing: lineSpacing } : {}),
+        children: [new TextRun(line)],
+      }),
   );
 
   const titleParagraph = new Paragraph({
     alignment: AlignmentType.CENTER,
-    spacing: { before: 400, after: 400 },
+    spacing: { before: 400, after: 400, ...lineSpacing },
     children: [new TextRun({ text: input.title.toUpperCase(), bold: true })],
   });
 
@@ -48,46 +142,37 @@ export async function buildDocumentBuffer(input: DocumentTemplateInput): Promise
     (text, index) =>
       new Paragraph({
         alignment: AlignmentType.JUSTIFIED,
-        spacing: { after: 200 },
+        ...(firstLineIndent ? { indent: firstLineIndent } : {}),
+        spacing: { after: 200, ...lineSpacing },
         children: [new TextRun(`${index + 1}. ${text}`)],
       }),
   );
 
   const footerParagraphs = [
     new Paragraph({
-      spacing: { before: 600 },
+      spacing: { before: 600, ...lineSpacing },
       children: [new TextRun('Дата: «___» ____________ ______ г.')],
     }),
     new Paragraph({
-      spacing: { before: 400 },
+      spacing: { before: 400, ...lineSpacing },
       children: [new TextRun('Подпись: _____________ /_____________/')],
     }),
   ];
 
   const document = new Document({
-    styles: {
-      default: {
-        document: {
-          run: { font: FONT, size: FONT_SIZE_HALF_POINTS },
-        },
-      },
-    },
+    ...(runDefaults ? { styles: { default: { document: { run: runDefaults } } } } : {}),
     sections: [
       {
-        properties: {
-          page: {
-            size: {
-              width: convertMillimetersToTwip(A4_WIDTH_MM),
-              height: convertMillimetersToTwip(A4_HEIGHT_MM),
-            },
-            margin: {
-              top: convertMillimetersToTwip(MARGIN_TOP_MM),
-              bottom: convertMillimetersToTwip(MARGIN_BOTTOM_MM),
-              left: convertMillimetersToTwip(MARGIN_LEFT_MM),
-              right: convertMillimetersToTwip(MARGIN_RIGHT_MM),
-            },
-          },
-        },
+        ...((pageSize ?? pageMargin)
+          ? {
+              properties: {
+                page: {
+                  ...(pageSize ? { size: pageSize } : {}),
+                  ...(pageMargin ? { margin: pageMargin } : {}),
+                },
+              },
+            }
+          : {}),
         children: [...headerParagraphs, titleParagraph, ...bodyParagraphs, ...footerParagraphs],
       },
     ],

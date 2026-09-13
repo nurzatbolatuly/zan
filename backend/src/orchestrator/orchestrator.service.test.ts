@@ -3,20 +3,19 @@ import type { ChatClient } from '@zan/shared';
 import { OrchestratorService } from './orchestrator.service.js';
 import type { RequestsRepository } from '../requests/requests.repository.js';
 import type { RequestStepRecord, RequestWithDetails } from '../requests/request.types.js';
-import type {
-  SearchAgent,
-  VerificationAgent,
-  EditorAgent,
-  DocumentAgent,
-} from '../agents/agent.types.js';
+import type { AnswerAgent, DocumentAgent } from '../agents/agent.types.js';
 import type { MetricsService } from '../metrics/metrics.service.js';
+import type { RequestEventsPublisher } from '../realtime/request-events.types.js';
+
+function fakeEvents(): RequestEventsPublisher {
+  return { publishSnapshot: vi.fn(async () => undefined), publishToken: vi.fn() };
+}
 
 function fakeMetrics(): MetricsService {
   return {
     observeHttpRequest: vi.fn(),
     observePipelineStep: vi.fn(),
     observeRequestCompleted: vi.fn(),
-    observeVerificationReview: vi.fn(),
   } as unknown as MetricsService;
 }
 
@@ -24,6 +23,8 @@ function fakeMetrics(): MetricsService {
 function fakeChat(response = '{"status":"ready","details":null}'): ChatClient {
   return {
     complete: vi.fn(async () => response),
+    completeWithWebSearchMeta: vi.fn(), // clarification-check не использует web_search
+    completeWithWebSearchMetaStream: vi.fn(),
   };
 }
 
@@ -58,6 +59,7 @@ function fakeRepo(request: RequestWithDetails | null): RequestsRepository {
     cancelIfActive: vi.fn(async () => true),
     setClarificationQuestion: vi.fn(async () => undefined),
     setClarificationAnswer: vi.fn(async () => undefined),
+    setDocumentRequested: vi.fn(async () => undefined),
     createStep: vi.fn(async (requestId, agentName, ordinal) => {
       ordinalCounter += 1;
       const step: RequestStepRecord = {
@@ -88,72 +90,65 @@ function fakeRepo(request: RequestWithDetails | null): RequestsRepository {
   };
 }
 
-function agents(
-  overrides: {
-    search?: SearchAgent;
-    verification?: VerificationAgent;
-    editor?: EditorAgent;
-    document?: DocumentAgent;
-  } = {},
-) {
-  const search: SearchAgent = overrides.search ?? {
-    run: vi.fn(async () => ({ draftAnswer: 'черновой ответ' })),
+function agents(overrides: { answer?: AnswerAgent; document?: DocumentAgent } = {}) {
+  const answer: AnswerAgent = overrides.answer ?? {
+    run: vi.fn(async () => ({
+      answer: 'итоговый ответ',
+      responseId: 'resp_answer_1',
+      citedUrls: [],
+    })),
   };
-  const verification: VerificationAgent = overrides.verification ?? {
-    run: vi.fn(async () => ({ revisedAnswer: 'проверенный ответ', concerns: [] })),
-  };
-  const editor: EditorAgent = overrides.editor ?? { run: vi.fn(async () => ({ summary: 'итог' })) };
   const document: DocumentAgent = overrides.document ?? {
     run: vi.fn(async () => ({ title: 'т', fileFormat: 'text/plain', content: 'содержимое' })),
   };
-  return { search, verification, editor, document };
+  return { answer, document };
 }
 
 describe('OrchestratorService', () => {
-  it('доводит успешный пайплайн до completed и сохраняет итоговый summary', async () => {
+  it('доводит успешный пайплайн до completed и сохраняет итоговый ответ', async () => {
     const request = baseRequest();
     const repo = fakeRepo(request);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       fakeChat(),
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
 
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'processing');
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'completed', {
-      resultSummary: 'итог',
+      resultSummary: 'итоговый ответ',
     });
-    expect(repo.createStep).toHaveBeenCalledTimes(3);
+    expect(repo.createStep).toHaveBeenCalledTimes(1);
     expect(document.run).not.toHaveBeenCalled();
   });
 
   it('запускает шаг document только когда includeDocument = true, и создаёт запись документа', async () => {
     const request = baseRequest({ includeDocument: true, documentType: 'заявление' });
     const repo = fakeRepo(request);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       fakeChat(),
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
 
-    // draftAnswer, переданный дальше editor/document, — это revisedAnswer verification, а не
-    // сырой draftAnswer от search напрямую.
     expect(document.run).toHaveBeenCalledWith(
-      expect.objectContaining({ documentType: 'заявление', draftAnswer: 'проверенный ответ' }),
+      expect.objectContaining({
+        documentType: 'заявление',
+        draftAnswer: 'итоговый ответ',
+        previousResponseId: 'resp_answer_1',
+      }),
     );
     expect(repo.createDocument).toHaveBeenCalledWith(
       'req-1',
@@ -163,164 +158,125 @@ describe('OrchestratorService', () => {
       'содержимое',
     );
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'completed', {
-      resultSummary: 'итог',
+      resultSummary: 'итоговый ответ',
     });
   });
 
-  it('останавливает пайплайн при ошибке блокирующего шага (editor)', async () => {
+  it('останавливает пайплайн при ошибке шага answer', async () => {
     const request = baseRequest();
     const repo = fakeRepo(request);
-    const failingEditor: EditorAgent = {
+    const failingAnswer: AnswerAgent = {
       run: vi.fn(async () => {
-        throw new Error('editor упал');
+        throw new Error('answer упал');
       }),
     };
-    const { search, verification, document } = agents({ editor: failingEditor });
+    const { document } = agents();
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      failingEditor,
+      failingAnswer,
       document,
       fakeMetrics(),
       fakeChat(),
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
 
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'failed', {
-      errorMessage: 'editor упал',
+      errorMessage: 'answer упал',
     });
-  });
-
-  it('не останавливает пайплайн при инфраструктурном сбое verification — раунд fail-open', async () => {
-    const request = baseRequest();
-    const repo = fakeRepo(request);
-    const failingVerification: VerificationAgent = {
-      run: vi.fn(async () => {
-        throw new Error('верификация упала');
-      }),
-    };
-    const { search, editor, document } = agents({ verification: failingVerification });
-    const orchestrator = new OrchestratorService(
-      repo,
-      search,
-      failingVerification,
-      editor,
-      document,
-      fakeMetrics(),
-      fakeChat(),
-    );
-
-    await orchestrator.processRequest('req-1');
-
-    // Сбой (исключение) — не то же самое, что замечания: раунд засчитывается пройденным без
-    // замечаний, search не переспрашивается повторно.
-    expect(search.run).toHaveBeenCalledTimes(1);
-    expect(editor.run).toHaveBeenCalled();
-    expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'completed', {
-      resultSummary: 'итог',
-    });
-    expect(repo.updateRequestStatus).not.toHaveBeenCalledWith('req-1', 'failed', expect.anything());
+    expect(document.run).not.toHaveBeenCalled();
   });
 
   it(
-    'при замечаниях verification НЕ переспрашивает Агента 1 (search вызывается ровно один раз) ' +
-      'и передаёт editor/document revisedAnswer от verification как есть',
+    'НЕ останавливает пайплайн при ошибке шага document (fail-open, см. runDocumentStep) — ' +
+      'ответ пользователю всё равно доходит до completed',
     async () => {
-      const request = baseRequest();
+      const request = baseRequest({ includeDocument: true, documentType: 'заявление' });
       const repo = fakeRepo(request);
-      const { search } = agents();
-      const verification: VerificationAgent = {
-        run: vi.fn(async () => ({
-          revisedAnswer: 'смягчённый ответ после правок',
-          concerns: ['номер статьи не подтверждён'],
-        })),
+      const { answer } = agents();
+      const failingDocument: DocumentAgent = {
+        run: vi.fn(async () => {
+          throw new Error('Не хватает даты увольнения, чтобы составить документ по существу.');
+        }),
       };
-      const { editor, document } = agents();
       const orchestrator = new OrchestratorService(
         repo,
-        search,
-        verification,
-        editor,
-        document,
+        answer,
+        failingDocument,
         fakeMetrics(),
         fakeChat(),
+        fakeEvents(),
       );
 
       await orchestrator.processRequest('req-1');
 
-      // Переспрос убран 2026-08-28 (см. класс-комментарий OrchestratorService) — search и
-      // verification вызываются ровно по разу, независимо от того, нашла ли verification
-      // замечания; замечания идут дальше только как revisedAnswer + запись в request_steps.
-      expect(search.run).toHaveBeenCalledTimes(1);
-      expect(verification.run).toHaveBeenCalledTimes(1);
-      expect(editor.run).toHaveBeenCalledWith(
-        expect.objectContaining({ draftAnswer: 'смягчённый ответ после правок' }),
-      );
+      expect(repo.createDocument).not.toHaveBeenCalled();
       expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'completed', {
-        resultSummary: 'итог',
+        resultSummary: 'итоговый ответ',
       });
+      expect(repo.updateRequestStatus).not.toHaveBeenCalledWith(
+        'req-1',
+        'failed',
+        expect.anything(),
+      );
     },
   );
 
   it('ничего не делает, если запрос не найден', async () => {
     const repo = fakeRepo(null);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       fakeChat(),
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('missing');
 
     expect(repo.updateRequestStatus).not.toHaveBeenCalled();
-    expect(search.run).not.toHaveBeenCalled();
+    expect(answer.run).not.toHaveBeenCalled();
   });
 
   it('останавливает пайплайн и просит уточнение, если LLM решает, что вопроса недостаточно', async () => {
     const request = baseRequest();
     const repo = fakeRepo(request);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     const chat = fakeChat('{"status":"needs_clarification","details":"Какая у вас ситуация?"}');
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       chat,
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
 
     expect(repo.setClarificationQuestion).toHaveBeenCalledWith('req-1', 'Какая у вас ситуация?');
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'needs_clarification');
-    expect(search.run).not.toHaveBeenCalled();
+    expect(answer.run).not.toHaveBeenCalled();
     expect(repo.createStep).not.toHaveBeenCalled();
   });
 
-  it('останавливает пайплайн и помечает запрос failed, если LLM решает, что вопрос не по теме права РК', async () => {
+  it('останавливает пайплайн и помечает запрос failed, если вопрос не по теме права РК', async () => {
     const request = baseRequest();
     const repo = fakeRepo(request);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     const chat = fakeChat(
       '{"status":"out_of_topic","details":"Этот сервис отвечает только на юридические вопросы по законодательству РК."}',
     );
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       chat,
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
@@ -329,8 +285,101 @@ describe('OrchestratorService', () => {
       errorMessage: 'Этот сервис отвечает только на юридические вопросы по законодательству РК.',
     });
     expect(repo.setClarificationQuestion).not.toHaveBeenCalled();
-    expect(search.run).not.toHaveBeenCalled();
+    expect(answer.run).not.toHaveBeenCalled();
     expect(repo.createStep).not.toHaveBeenCalled();
+  });
+
+  it(
+    'Этап 18: для уже завершённого запроса (resultSummary есть) запускает только document, ' +
+      'не трогая answer/clarification и не меняя общий статус запроса',
+    async () => {
+      const request = baseRequest({
+        status: 'completed',
+        resultSummary: 'итоговый ответ',
+        includeDocument: true,
+        documentType: 'иск',
+        steps: [
+          {
+            id: 'step-answer',
+            requestId: 'req-1',
+            agentName: 'answer',
+            ordinal: 1,
+            status: 'success',
+            input: null,
+            output: { answer: 'итоговый ответ', responseId: 'resp_answer_1', citedUrls: [] },
+            errorMessage: null,
+            startedAt: new Date(),
+            finishedAt: new Date(),
+          },
+        ],
+      });
+      const repo = fakeRepo(request);
+      const { answer, document } = agents();
+      const orchestrator = new OrchestratorService(
+        repo,
+        answer,
+        document,
+        fakeMetrics(),
+        fakeChat(),
+        fakeEvents(),
+      );
+
+      await orchestrator.processRequest('req-1');
+
+      expect(answer.run).not.toHaveBeenCalled();
+      expect(document.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryText: 'вопрос',
+          draftAnswer: 'итоговый ответ',
+          documentType: 'иск',
+          previousResponseId: 'resp_answer_1',
+        }),
+      );
+      expect(repo.createDocument).toHaveBeenCalledWith(
+        'req-1',
+        'иск',
+        'т',
+        'text/plain',
+        'содержимое',
+      );
+      expect(repo.updateRequestStatus).not.toHaveBeenCalledWith('req-1', 'processing');
+      expect(repo.updateRequestStatus).not.toHaveBeenCalledWith(
+        'req-1',
+        'completed',
+        expect.anything(),
+      );
+    },
+  );
+
+  it('Этап 18: не генерирует документ повторно, если он уже создан (идемпотентность)', async () => {
+    const request = baseRequest({
+      status: 'completed',
+      resultSummary: 'итоговый ответ',
+      document: {
+        id: 'doc-1',
+        requestId: 'req-1',
+        documentType: 'иск',
+        title: 'т',
+        fileFormat: 'text/plain',
+        content: 'содержимое',
+        createdAt: new Date(),
+      },
+    });
+    const repo = fakeRepo(request);
+    const { answer, document } = agents();
+    const orchestrator = new OrchestratorService(
+      repo,
+      answer,
+      document,
+      fakeMetrics(),
+      fakeChat(),
+      fakeEvents(),
+    );
+
+    await orchestrator.processRequest('req-1');
+
+    expect(document.run).not.toHaveBeenCalled();
+    expect(repo.createDocument).not.toHaveBeenCalled();
   });
 
   it('не спрашивает уточнение повторно и учитывает ответ пользователя в запросах к агентам', async () => {
@@ -339,27 +388,28 @@ describe('OrchestratorService', () => {
       clarificationAnswer: 'Меня уволили без предупреждения',
     });
     const repo = fakeRepo(request);
-    const { search, verification, editor, document } = agents();
+    const { answer, document } = agents();
     // Если бы оркестратор спросил повторно, тест бы упал на JSON.parse('') — уточнение не должно запрашиваться снова.
     const chat = fakeChat('');
     const orchestrator = new OrchestratorService(
       repo,
-      search,
-      verification,
-      editor,
+      answer,
       document,
       fakeMetrics(),
       chat,
+      fakeEvents(),
     );
 
     await orchestrator.processRequest('req-1');
 
     expect(chat.complete).not.toHaveBeenCalled();
-    expect(search.run).toHaveBeenCalledWith({
-      queryText: 'вопрос\n\nУточнение пользователя: Меня уволили без предупреждения',
-    });
+    expect(answer.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryText: 'вопрос\n\nУточнение пользователя: Меня уволили без предупреждения',
+      }),
+    );
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'completed', {
-      resultSummary: 'итог',
+      resultSummary: 'итоговый ответ',
     });
   });
 });

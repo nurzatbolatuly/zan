@@ -44,6 +44,14 @@ export interface RequestsRepository {
   cancelIfActive(id: string): Promise<boolean>;
   setClarificationQuestion(id: string, question: string): Promise<void>;
   setClarificationAnswer(id: string, answer: string): Promise<void>;
+  /**
+   * Этап 18: помечает уже завершённый запрос как "нужен документ" (см.
+   * RequestsService.requestDocument) — includeDocument/documentType раньше выставлялись только
+   * при создании запроса (см. CreateRequestDto), теперь также задним числом, когда пользователь
+   * решает приложить документ уже после того, как увидел ответ. Статус самого запроса намеренно
+   * не трогаем (остаётся 'completed') — см. OrchestratorService.processDocumentOnlyResume.
+   */
+  setDocumentRequested(id: string, documentType: string): Promise<void>;
   createStep(requestId: string, agentName: AgentName, ordinal: number): Promise<RequestStepRecord>;
   startStep(stepId: string, input: unknown): Promise<void>;
   finishStep(
@@ -58,6 +66,24 @@ export interface RequestsRepository {
     fileFormat: string,
     content: string,
   ): Promise<DocumentRecord>;
+}
+
+/**
+ * Транспортный сбой перед PostgREST (например, 504 от gateway Supabase на "просыпающемся" после
+ * паузы проекте — так и обнаружили: `error.message === 'Gateway Timeout'` без единого другого
+ * поля) — в отличие от настоящей ошибки БД (нарушение constraint, невалидный запрос и т.п.),
+ * которую PostgREST всегда возвращает вместе с `code` (Postgres SQLSTATE). Повтор второй ошибки
+ * её не исправит — тот же constraint нарушится снова; повтор первой вполне может проскочить,
+ * если к этому моменту сервис уже "проснулся"/сеть восстановилась.
+ */
+function isTransientSupabaseError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code !== 'string' || code.length === 0;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 interface RequestRow {
@@ -104,19 +130,34 @@ interface DocumentRow {
 export class PgRequestsRepository implements RequestsRepository {
   constructor(@Inject(SUPABASE_ADMIN) private readonly supabase: SupabaseClient) {}
 
+  /**
+   * Один повтор при транспортном сбое (см. isTransientSupabaseError) — это единственный
+   * синхронный шаг на пути POST /requests (до ответа пользователю, см. RequestsService.create),
+   * и живой инцидент показал, что "просыпающийся" после паузы Supabase-проект может отдать 504
+   * на первый запрос за несколько секунд, а на повтор почти сразу — раньше это было для
+   * пользователя мгновенным 500 без единого шанса на успех. Не ретраим настоящие ошибки БД (те, у
+   * которых есть `code`) — повтор их не исправит.
+   */
   async createRequest(input: CreateRequestInput): Promise<RequestRecord> {
-    const { data, error } = await this.supabase
-      .from('requests')
-      .insert({
-        query_text: input.queryText,
-        include_document: input.includeDocument,
-        document_type: input.documentType,
-        owner_token_hash: input.ownerTokenHash,
-      })
-      .select()
-      .single<RequestRow>();
-    if (error) throw error;
-    return mapRequest(data);
+    const insert = () =>
+      this.supabase
+        .from('requests')
+        .insert({
+          query_text: input.queryText,
+          include_document: input.includeDocument,
+          document_type: input.documentType,
+          owner_token_hash: input.ownerTokenHash,
+        })
+        .select()
+        .single<RequestRow>();
+
+    let result = await insert();
+    if (result.error && isTransientSupabaseError(result.error)) {
+      await delay(500);
+      result = await insert();
+    }
+    if (result.error) throw result.error;
+    return mapRequest(result.data);
   }
 
   async isOwnedBy(id: string, ownerTokenHash: string | null): Promise<boolean> {
@@ -239,6 +280,18 @@ export class PgRequestsRepository implements RequestsRepository {
     const { error } = await this.supabase
       .from('requests')
       .update({ clarification_answer: answer, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) throw error;
+  }
+
+  async setDocumentRequested(id: string, documentType: string): Promise<void> {
+    const { error } = await this.supabase
+      .from('requests')
+      .update({
+        include_document: true,
+        document_type: documentType,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', id);
     if (error) throw error;
   }

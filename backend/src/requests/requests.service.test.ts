@@ -5,6 +5,11 @@ import { RequestsService } from './requests.service.js';
 import type { RequestsRepository } from './requests.repository.js';
 import type { RequestRecord, RequestWithDetails } from './request.types.js';
 import type { RequestProcessingJobData } from '../queue/queue.constants.js';
+import type { RequestEventsPublisher } from '../realtime/request-events.types.js';
+
+function fakeEvents(): RequestEventsPublisher {
+  return { publishSnapshot: vi.fn(async () => undefined), publishToken: vi.fn() };
+}
 
 function fakeRepo(overrides: Partial<RequestsRepository> = {}): RequestsRepository {
   return {
@@ -15,6 +20,7 @@ function fakeRepo(overrides: Partial<RequestsRepository> = {}): RequestsReposito
     updateRequestStatus: vi.fn(),
     setClarificationQuestion: vi.fn(),
     setClarificationAnswer: vi.fn(),
+    setDocumentRequested: vi.fn(),
     createStep: vi.fn(),
     startStep: vi.fn(),
     finishStep: vi.fn(),
@@ -44,7 +50,7 @@ describe('RequestsService', () => {
     };
     const repo = fakeRepo({ createRequest: vi.fn(async () => created) });
     const queue = fakeQueue();
-    const service = new RequestsService(repo, queue);
+    const service = new RequestsService(repo, queue, fakeEvents());
 
     const result = await service.create({ queryText: 'вопрос' }, 'hash-1');
 
@@ -58,7 +64,7 @@ describe('RequestsService', () => {
   it('отклоняет includeDocument без documentType и не создаёт запрос', async () => {
     const repo = fakeRepo();
     const queue = fakeQueue();
-    const service = new RequestsService(repo, queue);
+    const service = new RequestsService(repo, queue, fakeEvents());
 
     await expect(
       service.create({ queryText: 'вопрос', includeDocument: true }, 'hash-1'),
@@ -69,7 +75,7 @@ describe('RequestsService', () => {
 
   it('выбрасывает NotFoundException, если запрос не найден', async () => {
     const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => null) });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(service.getById('missing', 'hash-1')).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -80,7 +86,7 @@ describe('RequestsService', () => {
       findRequestWithDetails: vi.fn(async () => details),
       isOwnedBy: vi.fn(async () => false),
     });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(service.getById('req-1', 'чужой-hash')).rejects.toBeInstanceOf(NotFoundException);
   });
@@ -88,14 +94,14 @@ describe('RequestsService', () => {
   it('возвращает запрос с деталями, если найден и принадлежит сессии', async () => {
     const details = { id: 'req-1', steps: [], document: null } as unknown as RequestWithDetails;
     const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(service.getById('req-1', 'hash-1')).resolves.toBe(details);
   });
 
   it('listMine возвращает пустой список без похода в БД, если нет cookie сессии', async () => {
     const repo = fakeRepo();
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(service.listMine(null)).resolves.toEqual([]);
     expect(repo.listByOwner).not.toHaveBeenCalled();
@@ -106,7 +112,7 @@ describe('RequestsService', () => {
       ReturnType<RequestsRepository['listByOwner']>
     >;
     const repo = fakeRepo({ listByOwner: vi.fn(async () => summaries) });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(service.listMine('hash-1')).resolves.toBe(summaries);
     expect(repo.listByOwner).toHaveBeenCalledWith('hash-1', expect.any(Number));
@@ -120,7 +126,7 @@ describe('RequestsService', () => {
       document: null,
     } as unknown as RequestWithDetails;
     const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(
       service.submitClarification('req-1', { answer: 'ответ' }, 'hash-1'),
@@ -137,12 +143,61 @@ describe('RequestsService', () => {
     } as unknown as RequestWithDetails;
     const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
     const queue = fakeQueue();
-    const service = new RequestsService(repo, queue);
+    const service = new RequestsService(repo, queue, fakeEvents());
 
     await service.submitClarification('req-1', { answer: 'меня уволили' }, 'hash-1');
 
     expect(repo.setClarificationAnswer).toHaveBeenCalledWith('req-1', 'меня уволили');
     expect(repo.updateRequestStatus).toHaveBeenCalledWith('req-1', 'pending');
+    expect(queue.add).toHaveBeenCalledWith('process', { requestId: 'req-1' });
+  });
+
+  it('requestDocument отклоняет запрос, который ещё не завершён', async () => {
+    const details = {
+      id: 'req-1',
+      status: 'processing',
+      resultSummary: null,
+      document: null,
+    } as unknown as RequestWithDetails;
+    const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
+
+    await expect(
+      service.requestDocument('req-1', { documentType: 'иск' }, 'hash-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.setDocumentRequested).not.toHaveBeenCalled();
+  });
+
+  it('requestDocument отклоняет запрос, если документ уже создан', async () => {
+    const details = {
+      id: 'req-1',
+      status: 'completed',
+      resultSummary: 'итоговый ответ',
+      document: { id: 'doc-1' },
+    } as unknown as RequestWithDetails;
+    const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
+
+    await expect(
+      service.requestDocument('req-1', { documentType: 'иск' }, 'hash-1'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repo.setDocumentRequested).not.toHaveBeenCalled();
+  });
+
+  it('requestDocument помечает завершённый запрос и снова ставит его в очередь', async () => {
+    const details = {
+      id: 'req-1',
+      status: 'completed',
+      resultSummary: 'итоговый ответ',
+      document: null,
+    } as unknown as RequestWithDetails;
+    const repo = fakeRepo({ findRequestWithDetails: vi.fn(async () => details) });
+    const queue = fakeQueue();
+    const service = new RequestsService(repo, queue, fakeEvents());
+
+    await service.requestDocument('req-1', { documentType: 'иск' }, 'hash-1');
+
+    expect(repo.setDocumentRequested).toHaveBeenCalledWith('req-1', 'иск');
     expect(queue.add).toHaveBeenCalledWith('process', { requestId: 'req-1' });
   });
 
@@ -157,7 +212,7 @@ describe('RequestsService', () => {
       findRequestWithDetails: vi.fn(async () => details),
       isOwnedBy: vi.fn(async () => false),
     });
-    const service = new RequestsService(repo, fakeQueue());
+    const service = new RequestsService(repo, fakeQueue(), fakeEvents());
 
     await expect(
       service.submitClarification('req-1', { answer: 'ответ' }, 'чужой-hash'),

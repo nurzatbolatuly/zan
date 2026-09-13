@@ -14,8 +14,8 @@ export class ApiError extends Error {
 
 export interface CreateRequestInput {
   queryText: string;
-  includeDocument: boolean;
-  documentType: string | null;
+  includeDocument?: boolean;
+  documentType?: string | null;
 }
 
 export interface CreateRequestResponse {
@@ -92,6 +92,25 @@ export async function submitClarification(id: string, answer: string): Promise<v
   }
 }
 
+/**
+ * Этап 18: догенерация документа к уже завершённому ответу (см.
+ * backend/src/requests/requests.service.ts requestDocument) — вызывается с кнопки под готовым
+ * ответом (см. RequestStatusView.tsx), а не через композер следующего сообщения: агенту document
+ * так не нужно заново пересказывать вопрос, у него уже есть queryText/resultSummary этого же
+ * запроса на бэкенде.
+ */
+export async function requestDocument(id: string, documentType: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/requests/${id}/document`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ documentType }),
+  });
+  if (!response.ok) {
+    throw new ApiError(await parseErrorMessage(response), response.status);
+  }
+}
+
 /** Soft-cancel (см. backend/src/requests/requests.service.ts) — отменить свой запрос, пока он
  *  ещё pending/processing/needs_clarification. */
 export async function cancelRequest(id: string): Promise<void> {
@@ -116,8 +135,17 @@ export async function fetchRequestHistory(): Promise<RequestSummary[]> {
   return response.json() as Promise<RequestSummary[]>;
 }
 
+/**
+ * Этап 14 — WS-канал состояния запроса (см. backend/src/realtime/realtime.gateway.ts), заменяет
+ * 2с-поллинг push-обновлениями в реальном времени (см. RequestStatusView.tsx). Тот же origin, что
+ * и REST API — просто `http`→`ws`/`https`→`wss`, без отдельного хоста/порта под WS.
+ */
+export function requestEventsUrl(id: string): string {
+  return `${API_BASE_URL.replace(/^http/, 'ws')}/ws/requests/${id}`;
+}
+
 export async function fetchAnalytics(): Promise<AnalyticsSummary> {
-  const response = await fetch(`${API_BASE_URL}/analytics/topics`, { cache: 'no-store' });
+  const response = await fetch(`${API_BASE_URL}/analytics/summary`, { cache: 'no-store' });
   if (!response.ok) {
     throw new ApiError(await parseErrorMessage(response), response.status);
   }

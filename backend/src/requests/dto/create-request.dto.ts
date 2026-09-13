@@ -1,16 +1,15 @@
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { trimField } from '../../common/validate-dto.js';
 
 /**
- * Обрезаем пробелы до валидации длины — иначе MinLength(10) пропускает строку из одних
- * пробелов ("          "), а сама строка с пробелами по краям бесполезна для агентов и БД.
+ * `includeDocument`/`documentType` — чекбокс "приложить документ" (Этап 17, §9.13): доступен и на
+ * первом экране (RequestForm.tsx), и в композере продолжения чата (RequestStatusView.tsx), не
+ * только на первом сообщении. Автоопределение по тексту (Этап 16) убрано — явный чекбокс дешевле
+ * и точнее отдельного LLM-классификатора на каждое сообщение.
  */
-function trim({ value }: { value: unknown }): unknown {
-  return typeof value === 'string' ? value.trim() : value;
-}
-
 export class CreateRequestDto {
-  @Transform(trim)
+  @Transform(trimField)
   @IsString()
   @MinLength(10, { message: 'Опишите проблему подробнее (минимум 10 символов)' })
   @MaxLength(4000, { message: 'Слишком длинный запрос (максимум 4000 символов)' })
@@ -21,7 +20,7 @@ export class CreateRequestDto {
   includeDocument?: boolean;
 
   @IsOptional()
-  @Transform(trim)
+  @Transform(trimField)
   @IsString()
   @MaxLength(200)
   documentType?: string;
