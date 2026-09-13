@@ -5,7 +5,7 @@
   "description": "AI-ассистент по законодательству РК — монорепозиторий",
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "workspaces": [
     "frontend",

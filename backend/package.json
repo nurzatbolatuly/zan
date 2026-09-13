@@ -5,6 +5,9 @@
   "description": "API Gateway, оркестратор и агенты (NestJS)",
   "type": "module",
   "main": "src/main.ts",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
