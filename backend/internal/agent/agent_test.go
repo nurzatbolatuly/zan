@@ -43,7 +43,7 @@ func newTestClient(t *testing.T, llmHandler http.HandlerFunc, prompts PromptProv
 	return NewClient(prompts, rag, Config{
 		BaseURL:     server.URL,
 		APIKey:      "test-key",
-		Model:       "claude-sonnet-5",
+		Model:       "gpt-4o",
 		MaxTokens:   1024,
 		HTTPTimeout: 5 * time.Second,
 		RagTopK:     5,
@@ -55,8 +55,8 @@ func jsonLLMHandler(t *testing.T, body string) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(anthropicResponse{
-			Content: []anthropicContentBlock{{Type: "text", Text: body}},
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []openAIChoice{{Message: openAIMessage{Content: body}, FinishReason: "stop"}},
 		})
 	}
 }
@@ -112,12 +112,13 @@ func TestProcess_LLMCitesUnknownSource_MarksUnverified(t *testing.T) {
 func TestProcess_RagUnavailable_DegradesWithoutBlocking(t *testing.T) {
 	var seenSystemPrompt string
 	llm := func(w http.ResponseWriter, r *http.Request) {
-		var req anthropicRequest
+		var req openAIRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		seenSystemPrompt = req.System
+		require.NotEmpty(t, req.Messages)
+		seenSystemPrompt = req.Messages[0].Content
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(anthropicResponse{
-			Content: []anthropicContentBlock{{Type: "text", Text: `{"answer_text":"Ответ без источников","needs_clarification":false}`}},
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []openAIChoice{{Message: openAIMessage{Content: `{"answer_text":"Ответ без источников","needs_clarification":false}`}, FinishReason: "stop"}},
 		})
 	}
 	rag := fakeRagSearcher{err: errors.New("helper: connection refused")}
@@ -178,7 +179,9 @@ func TestProcess_InvalidJSONFromLLM_ReturnsPlainError(t *testing.T) {
 func TestProcess_ModelRefusal_ReturnsAgentResultError(t *testing.T) {
 	llm := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(anthropicResponse{StopReason: refusalStopReason})
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []openAIChoice{{FinishReason: refusalFinishReason}},
+		})
 	}
 	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, fakeRagSearcher{})
 

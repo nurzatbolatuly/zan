@@ -104,31 +104,36 @@ type Config struct {
 	// заметка, не полноценный файл, лимит меньше файлового.
 	VoiceMaxSizeBytes int64 `env:"VOICE_MAX_SIZE_BYTES" envDefault:"15728640"` // 15 МБ
 
-	// --- LLM-провайдер (Stage 5, BACKEND_PLAN.md §3: "Anthropic API") ---
+	// --- LLM-провайдер (Stage 5, BACKEND_PLAN.md §3 — изначально
+	// "Anthropic API", заменён на OpenAI по прямому запросу пользователя в
+	// Stage 8; internal/agent не завязан на конкретного провайдера сильнее,
+	// чем нужно — см. BACKEND_LOG.md) ---
 
-	// AnthropicAPIKey — без envDefault намеренно, та же причина, что у
+	// OpenAIAPIKey — без envDefault намеренно, та же причина, что у
 	// AdminToken/SessionHMACSecret/InternalSecret: секрет, который нельзя
 	// молча взять из значения по умолчанию. Без реального ключа LLM-вызов
 	// предсказуемо падает на 401 — обрабатывается тем же путём, что
 	// таймаут/5xx (status=error, кредит возвращается), не роняет процесс.
-	AnthropicAPIKey string `env:"ANTHROPIC_API_KEY,required"`
+	OpenAIAPIKey string `env:"OPENAI_API_KEY,required"`
 
-	// AnthropicModel — конфигурируемо (не хардкод), чтобы смена модели не
+	// OpenAIModel — конфигурируемо (не хардкод), чтобы смена модели не
 	// требовала пересборки бинаря — тот же принцип, что WhisperModelSize
 	// на стороне Python (BACKEND_PLAN.md §6 п.10).
-	AnthropicModel string `env:"ANTHROPIC_MODEL" envDefault:"claude-sonnet-5"`
+	OpenAIModel string `env:"OPENAI_MODEL" envDefault:"gpt-4o"`
 
-	// AnthropicBaseURL — переопределяется в тестах/локальной разработке на
-	// адрес фейкового сервера (httptest) вместо реального api.anthropic.com —
+	// OpenAIBaseURL — переопределяется в тестах/локальной разработке на
+	// адрес фейкового сервера (httptest) вместо реального api.openai.com —
 	// internal/agent не завязан на конкретный хост.
-	AnthropicBaseURL string `env:"ANTHROPIC_BASE_URL" envDefault:"https://api.anthropic.com"`
+	OpenAIBaseURL string `env:"OPENAI_BASE_URL" envDefault:"https://api.openai.com"`
 
-	// AnthropicMaxTokens — лимит длины ответа модели (структурированный
+	// OpenAIMaxTokens — лимит длины ответа модели (структурированный
 	// JSON с answer_text/sources/findings — достаточно с запасом для
-	// развёрнутого юридического ответа).
-	AnthropicMaxTokens int `env:"ANTHROPIC_MAX_TOKENS" envDefault:"2048"`
+	// развёрнутого юридического ответа). Отправляется как
+	// max_completion_tokens (internal/agent/llm_client.go), не устаревший
+	// max_tokens Chat Completions API.
+	OpenAIMaxTokens int `env:"OPENAI_MAX_TOKENS" envDefault:"2048"`
 
-	// LLMTimeout — таймаут одной попытки HTTP-вызова к Anthropic (до
+	// LLMTimeout — таймаут одной попытки HTTP-вызова к LLM-провайдеру (до
 	// ретраев — internal/agent.llmRetryPolicy делает до 2 повторов поверх
 	// этого таймаута на каждую попытку, backend-roadmap.md §5.2).
 	LLMTimeout time.Duration `env:"LLM_TIMEOUT" envDefault:"30s"`

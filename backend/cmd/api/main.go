@@ -191,10 +191,10 @@ func run() error {
 	// зависимостей (Strategy, BACKEND_PLAN.md). helperClient (*grpcclient.Client)
 	// удовлетворяет agent.RagSearcher структурно, promptSvc — agent.PromptProvider.
 	agentClient := agent.NewClient(promptSvc, helperClient, agent.Config{
-		BaseURL:     cfg.AnthropicBaseURL,
-		APIKey:      cfg.AnthropicAPIKey,
-		Model:       cfg.AnthropicModel,
-		MaxTokens:   cfg.AnthropicMaxTokens,
+		BaseURL:     cfg.OpenAIBaseURL,
+		APIKey:      cfg.OpenAIAPIKey,
+		Model:       cfg.OpenAIModel,
+		MaxTokens:   cfg.OpenAIMaxTokens,
 		HTTPTimeout: cfg.LLMTimeout,
 		RagTopK:     cfg.RagTopK,
 		Breaker:     llmBreakerConfig,

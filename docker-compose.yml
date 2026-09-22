@@ -105,17 +105,17 @@ services:
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-zanminio}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-zanminiosecret}
       S3_BUCKET: "zan-files"
-      # --- LLM-провайдер (Stage 5, BACKEND_PLAN.md §3: "Anthropic API") ---
-      # ANTHROPIC_API_KEY — без дефолта в Go-коде (internal/config), значение
+      # --- LLM-провайдер (Stage 5, провайдер заменён на OpenAI в Stage 8) ---
+      # OPENAI_API_KEY — без дефолта в Go-коде (internal/config), значение
       # ниже — placeholder для локального docker-compose up без реального
       # ключа: RAG/остальной стек поднимается и работает, вызов LLM реально
-      # упадёт на 401 (Anthropic отклонит ключ) — это ожидаемо и покрыто тем
+      # упадёт на 401 (OpenAI отклонит ключ) — это ожидаемо и покрыто тем
       # же путём, что таймаут/5xx (status=error, кредит возвращается), см.
       # scripts/smoke-test.sh. Подставьте реальный ключ в .env для настоящих
       # ответов агента.
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-sk-ant-dev-placeholder-not-a-real-key}
-      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-sk-placeholder-not-a-real-key}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
       # CLAMAV_ADDR — Stage 8, internal/platform/clamav.Scanner заменяет
       # file.NoopAVScanner (см. сервис clamav выше).
       CLAMAV_ADDR: "clamav:3310"

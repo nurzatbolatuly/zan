@@ -144,7 +144,7 @@ echo "created=$created rate_limited(429)=$rate_limited unexpected_5xx=$server_er
 
 awk '$2 != "" {sum+=$2; n++; if ($2>max || n==1) max=$2} END {if (n>0) printf "latency: avg=%.3fs max=%.3fs (n=%d)\n", sum/n, max, n}' "$all_results"
 
-[ "$server_errors" -eq 0 ] || fail "$server_errors request(s) returned an unexpected 5xx — backend/ должен либо создать тред (201, status=error внутри — placeholder ANTHROPIC_API_KEY), либо корректно отклонить (429), не падать с internal_error"
+[ "$server_errors" -eq 0 ] || fail "$server_errors request(s) returned an unexpected 5xx — backend/ должен либо создать тред (201, status=error внутри — placeholder OPENAI_API_KEY), либо корректно отклонить (429), не падать с internal_error"
 [ "$created" -gt 0 ] || fail "zero requests returned 201 — path is fully broken, not just rate-limited"
 
 echo "LOAD TEST PASSED"

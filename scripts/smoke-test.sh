@@ -178,16 +178,16 @@ qa_thread_response="$(curl -sSf -H "Authorization: Session $session_token" -H "C
 qa_thread_status="$(echo "$qa_thread_response" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)"
 case "$qa_thread_status" in
   done|clarify)
-    # ANTHROPIC_API_KEY в окружении — рабочий реальный ключ (не дефолтный
+    # OPENAI_API_KEY в окружении — рабочий реальный ключ (не дефолтный
     # placeholder docker-compose.yml) — агент реально ответил.
-    echo "LLM agent responded (status=$qa_thread_status) — a working ANTHROPIC_API_KEY is configured."
+    echo "LLM agent responded (status=$qa_thread_status) — a working OPENAI_API_KEY is configured."
     ;;
   error)
     # Ожидаемо с дефолтным placeholder-ключом (docker-compose.yml): реальный
-    # вызов к api.anthropic.com получает 401, internal/agent не ретраит
+    # вызов к api.openai.com получает 401, internal/agent не ретраит
     # 4xx, thread.Service помечает тред error и возвращает кредит на баланс
     # (backend-roadmap.md §5.2) — проверяем именно это, не просто "не упало".
-    echo "LLM agent call failed as expected with a placeholder ANTHROPIC_API_KEY (status=error) — checking credit was refunded."
+    echo "LLM agent call failed as expected with a placeholder OPENAI_API_KEY (status=error) — checking credit was refunded."
     [ "$(qa_balance)" = "1" ] || fail "expected qa credit refunded to 1 after agent error"
     ;;
   *)
@@ -217,7 +217,7 @@ doc_status="$(curl -sS -o /tmp/zan-smoke-generate-document.json -w '%{http_code}
 case "$doc_status" in
   201)
     files_ready="$(python3 -c "import json; print(json.load(open('/tmp/zan-smoke-generate-document.json'))['files_ready'])")"
-    echo "document generation responded 201 (files_ready=$files_ready) — a working ANTHROPIC_API_KEY is configured."
+    echo "document generation responded 201 (files_ready=$files_ready) — a working OPENAI_API_KEY is configured."
     if [ "$files_ready" = "True" ]; then
       echo "--- backend: GET /threads/{id}/document?format=pdf отдаёт скачиваемую ссылку ---"
       doc_url="$(curl -sSf -H "Authorization: Session $session_token" \
@@ -230,7 +230,7 @@ case "$doc_status" in
   502)
     # Тот же ожидаемый путь с placeholder-ключом, что и у qa-раунда выше —
     # document_generation_failed, doc-кредит должен вернуться на баланс.
-    echo "document generation failed as expected with a placeholder ANTHROPIC_API_KEY (502) — checking credit was refunded."
+    echo "document generation failed as expected with a placeholder OPENAI_API_KEY (502) — checking credit was refunded."
     doc_balance="$(curl -sSf -H "Authorization: Session $session_token" http://localhost:8080/balance \
       | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((x['quantity'] for x in d if x['service_id']=='doc'), 0))")"
     [ "$doc_balance" = "1" ] || fail "expected doc credit refunded to 1 after generation error"

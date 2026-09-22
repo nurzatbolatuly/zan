@@ -293,7 +293,7 @@ func TestGenerate_ForeignSession_ReturnsErrThreadNotFound(t *testing.T) {
 }
 
 func TestGenerate_LLMFails_RefundsCreditAndSavesNoMessage(t *testing.T) {
-	generator := &fakeGenerator{err: errors.New("agent: anthropic http 401")}
+	generator := &fakeGenerator{err: errors.New("agent: openai http 401")}
 	setup := newTestSetup(generator, &fakeRenderer{}, nil)
 
 	_, _, err := setup.svc.Generate(context.Background(), testThreadID, testSessionID)

@@ -137,7 +137,7 @@ func (c *Client) runLLM(ctx context.Context, agentType domain.AgentType, history
 		return llmOutcome{}, fmt.Errorf("agent: call llm: %w", err)
 	}
 
-	if resp.StopReason == refusalStopReason {
+	if len(resp.Choices) > 0 && resp.Choices[0].FinishReason == refusalFinishReason {
 		l.Error("llm_call_completed", slog.Group("context",
 			slog.Int64("latency_ms", latencyMs),
 			slog.String("result", "refused"),

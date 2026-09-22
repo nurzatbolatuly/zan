@@ -54,13 +54,14 @@ func buildSystemPrompt(basePromptText string, matches []grpcclient.RagMatch) str
 }
 
 // buildMessages — история треда (zan-backend-tz-v2.md §4.6: "в контекст —
-// вся история сообщений треда") в формате Anthropic Messages API. Messages
-// API требует строгого чередования user/assistant начиная с user —
-// гарантируется статус-машиной thread.Service (агент вызывается синхронно
-// сразу после каждого сообщения пользователя, до следующего сообщения),
-// эта функция полагается на инвариант, а не проверяет его сама.
-func buildMessages(history []domain.Message) []anthropicMessage {
-	messages := make([]anthropicMessage, 0, len(history))
+// вся история сообщений треда") в формате OpenAI Chat Completions API
+// (system-сообщение добавляется отдельно, llmClient.doRequest). Строгого
+// чередования user/assistant OpenAI не требует (в отличие от Anthropic
+// Messages API), но порядок всё равно идёт как есть — тот же инвариант
+// статус-машины thread.Service (агент вызывается синхронно сразу после
+// каждого сообщения пользователя, до следующего).
+func buildMessages(history []domain.Message) []openAIMessage {
+	messages := make([]openAIMessage, 0, len(history))
 	for _, m := range history {
 		role := "user"
 		if m.Sender == domain.MessageSenderAssistant {
@@ -68,11 +69,10 @@ func buildMessages(history []domain.Message) []anthropicMessage {
 		}
 		text := m.Text
 		if text == "" {
-			// input_type=file без текста (Stage 4) — Messages API не
-			// принимает пустой content-блок.
+			// input_type=file без текста (Stage 4) — не отправляем пустой content.
 			text = "(сообщение без текста, только вложение)"
 		}
-		messages = append(messages, anthropicMessage{Role: role, Content: text})
+		messages = append(messages, openAIMessage{Role: role, Content: text})
 	}
 	return messages
 }

@@ -51,7 +51,9 @@ func TestGenerateDocument_NeedsClarification_ReturnsSentinelError(t *testing.T) 
 func TestGenerateDocument_ModelRefusal_ReturnsErrModelRefused(t *testing.T) {
 	llm := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(anthropicResponse{StopReason: refusalStopReason})
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []openAIChoice{{FinishReason: refusalFinishReason}},
+		})
 	}
 	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, fakeRagSearcher{})
 

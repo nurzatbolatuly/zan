@@ -28,14 +28,14 @@ type llmJSONResponse struct {
 	NeedsClarification bool             `json:"needs_clarification"`
 }
 
-// parseAgentResponse — разбирает сырой ответ Anthropic (объединяет все
-// text-блоки content, снимает возможную markdown-обёртку — модель иногда
-// оборачивает JSON в ```json несмотря на инструкцию в промпте) в
+// parseAgentResponse — разбирает сырой ответ OpenAI (первый choice, снимает
+// возможную markdown-обёртку — модель иногда оборачивает JSON в ```json
+// несмотря на response_format=json_object и явную инструкцию в промпте) в
 // llmJSONResponse. Ошибка здесь — тот самый "невалидный JSON" из каталога
 // ошибок (backend-roadmap.md §5.2), возвращается как error, не как
 // AgentResult{Status: AgentResultError} — решение уже сделано портом
 // thread.Agent (internal/service/thread/agent.go).
-func parseAgentResponse(resp anthropicResponse) (llmJSONResponse, error) {
+func parseAgentResponse(resp openAIResponse) (llmJSONResponse, error) {
 	raw := stripMarkdownFence(extractText(resp))
 
 	var parsed llmJSONResponse
@@ -48,14 +48,14 @@ func parseAgentResponse(resp anthropicResponse) (llmJSONResponse, error) {
 	return parsed, nil
 }
 
-func extractText(resp anthropicResponse) string {
-	var b strings.Builder
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			b.WriteString(block.Text)
-		}
+// extractText — content первого choice. OpenAI Chat Completions API (в
+// отличие от Anthropic Messages API) не разбивает ответ на несколько
+// content-блоков — content уже готовая строка.
+func extractText(resp openAIResponse) string {
+	if len(resp.Choices) == 0 {
+		return ""
 	}
-	return b.String()
+	return resp.Choices[0].Message.Content
 }
 
 // stripMarkdownFence — снимает ```json ... ``` / ``` ... ```, если модель
