@@ -1,0 +1,11 @@
+# app/genproto — НЕ игнорируется: сгенерированный код коммитится
+# (BACKEND_PLAN.md §3.2, BACKEND_CODING_STANDARDS.md §3).
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.env

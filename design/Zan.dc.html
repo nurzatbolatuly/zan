@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: #FBFAF8; }
+  [data-theme="light"] {
+    --bg: #FBFAF8; --surface: #FFFFFF; --surface-2: #F3F1EC; --ink: #15191A;
+    --muted: #6B7370; --line: #E5E2DC; --accent: #2F6F5E; --accent-ink: #FFFFFF;
+    --accent-soft: #E9F1ED; --warn: #8A5A1E; --warn-soft: #F6EEE2; --danger: #98342B;
+    --shadow: 0 1px 2px rgba(20,25,23,.05), 0 8px 24px rgba(20,25,23,.05);
+  }
+  [data-theme="dark"] {
+    --bg: #111413; --surface: #191D1B; --surface-2: #212624; --ink: #ECEFEC;
+    --muted: #99A19D; --line: #2B302E; --accent: #55A98F; --accent-ink: #0E1413;
+    --accent-soft: #1C2724; --warn: #D2A165; --warn-soft: #2A2419; --danger: #E0796D;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.28);
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--ink); }
+  textarea, input, button { font: inherit; color: inherit; }
+  ::placeholder { color: var(--muted); }
+  @keyframes zanPulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="min-height:100vh;background:var(--bg);color:var(--ink);font-family:Manrope,system-ui,sans-serif;font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased">
+
+  <header style="position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--line)">
+    <div style="max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-right:auto;min-width:0">
+        <div style="font-weight:700;font-size:18px;letter-spacing:.03em">ZAN</div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.tagline }}</div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:6px">
+        <button onClick="{{ toChat }}" style="{{ navChatStyle }}" style-hover="border-color:var(--accent)">{{ t.navChat }}</button>
+        <button onClick="{{ toHistory }}" style="{{ navHistoryStyle }}" style-hover="border-color:var(--accent)">{{ t.navHistory }}</button>
+        <button onClick="{{ toTariffs }}" style="{{ navTariffsStyle }}" style-hover="border-color:var(--accent)">{{ t.navTariffs }}</button>
+        <button onClick="{{ toSettings }}" style="{{ navSettingsStyle }}" style-hover="border-color:var(--accent)">{{ t.navSettings }}</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:6px;flex:none">
+        <button onClick="{{ toggleLang }}" title="Рус / Қаз" style="height:34px;padding:0 13px;border:1px solid var(--line);background:transparent;border-radius:10px;font-family:Arial,sans-serif;font-size:13px;font-weight:400;letter-spacing:.01em;cursor:pointer;color:var(--muted)" style-hover="border-color:var(--accent);color:var(--accent)">{{ langLabel }}</button>
+        <button onClick="{{ toggleTheme }}" title="Тема" style="width:34px;height:34px;display:grid;place-items:center;border:1px solid var(--line);background:var(--surface);border-radius:10px;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">
+          <span style="width:13px;height:13px;border-radius:50%;border:2px solid currentColor;background:linear-gradient(90deg,currentColor 50%,transparent 50%);display:block"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main style="max-width:1080px;margin:0 auto;padding:0 16px 140px">
+
+    <!-- ЧАТ -->
+    <sc-if value="{{ isChat }}" hint-placeholder-val="{{ true }}">
+      <div style="padding-top:20px">
+
+        <!-- Пустое состояние -->
+        <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:56px 0 8px;max-width:680px">
+            <h1 style="margin:0 0 10px;font-size:34px;line-height:1.15;letter-spacing:-.03em;font-weight:700;text-wrap:pretty">{{ t.emptyTitle }}</h1>
+            <p style="margin:0;font-size:17px;color:var(--muted);text-wrap:pretty">{{ t.emptySub }}</p>
+          </div>
+        </sc-if>
+
+        <!-- Тред -->
+        <sc-if value="{{ hasThread }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:20px;max-width:760px">
+
+            <div style="align-self:flex-end;max-width:85%;background:var(--accent-soft);border:1px solid var(--line);border-radius:16px 16px 4px 16px;padding:12px 16px">
+              <div style="font-size:15px;text-wrap:pretty">{{ t.msg1 }}</div>
+            </div>
+
+            <div style="max-width:92%">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:6px">{{ t.assistant }}</div>
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px 16px 16px 16px;padding:16px 18px;box-shadow:var(--shadow)">
+                <p style="margin:0 0 10px;font-size:15px;text-wrap:pretty">{{ t.ans1a }}</p>
+                <p style="margin:0 0 14px;font-size:15px;text-wrap:pretty">{{ t.ans1b }}</p>
+
+                <button onClick="{{ toggleSources }}" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 12px;border:1px solid var(--line);background:var(--surface-2);border-radius:10px;cursor:pointer;font-size:13px;font-weight:600;color:var(--ink)" style-hover="border-color:var(--accent)">
+                  <span style="{{ caretStyle }}"></span>
+                  <span>{{ t.sourcesToggle }}</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-weight:400;color:var(--muted)">3</span>
+                </button>
+
+                <sc-if value="{{ sourcesOpen }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;padding-left:2px">
+                    <sc-for list="{{ sources }}" as="src" hint-placeholder-count="3">
+                      <div style="padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:transparent">
+                        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent);margin-bottom:4px">{{ src.ref }}</div>
+                        <div style="font-size:13px;color:var(--muted);line-height:1.5;text-wrap:pretty">{{ src.quote }}</div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <div style="display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+                  <button onClick="{{ voteUp }}" style="{{ upStyle }}" style-hover="border-color:var(--accent)">{{ t.helpful }}</button>
+                  <button onClick="{{ voteDown }}" style="{{ downStyle }}" style-hover="border-color:var(--accent)">{{ t.notHelpful }}</button>
+                  <div style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)">{{ t.freeFollowup }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div style="align-self:flex-end;max-width:85%;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+              <div style="display:flex;align-items:center;gap:11px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:11px 14px;box-shadow:var(--shadow)">
+                <div style="width:32px;height:38px;border-radius:5px;border:1px solid var(--line);background:var(--surface-2);flex:none"></div>
+                <div style="min-width:0">
+                  <div style="font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">dogovor-arenda.pdf</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)">248 KB · PDF</div>
+                </div>
+              </div>
+              <div style="background:var(--accent-soft);border:1px solid var(--line);border-radius:16px 16px 4px 16px;padding:12px 16px;font-size:15px">{{ t.msg2 }}</div>
+            </div>
+
+            <div style="max-width:92%">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:6px">{{ t.assistant }}</div>
+              <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px 16px 16px 16px;padding:16px 18px;box-shadow:var(--shadow)">
+                <p style="margin:0 0 10px;font-size:15px;text-wrap:pretty">{{ t.ans2 }}</p>
+                <div>
+                  <sc-for list="{{ findings }}" as="f" hint-placeholder-count="3">
+                    <p style="margin:0 0 10px;font-size:15px;line-height:1.6;text-wrap:pretty"><strong>{{ f.title }}.</strong> {{ f.body }}</p>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+
+            <div style="max-width:92%">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:6px">{{ t.docReady }}</div>
+              <div style="background:var(--surface);border:1px solid var(--accent);border-radius:16px;padding:18px;box-shadow:var(--shadow)">
+                <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+                  <div style="width:46px;height:58px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);flex:none"></div>
+                  <div style="min-width:180px;flex:1">
+                    <div style="font-size:16px;font-weight:700;margin-bottom:3px">{{ t.docTitle }}</div>
+                    <div style="font-size:13px;color:var(--muted);text-wrap:pretty">{{ t.docSub }}</div>
+                  </div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+                  <button style="height:40px;padding:0 16px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:10px;font-size:14px;font-weight:600;cursor:pointer" style-hover="opacity:.9">{{ t.downloadPdf }}</button>
+                  <button style="height:40px;padding:0 16px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:10px;font-size:14px;font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">{{ t.downloadDocx }}</button>
+                  <button style="height:40px;padding:0 16px;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:10px;font-size:14px;font-weight:600;cursor:pointer" style-hover="border-color:var(--accent)">{{ t.editDoc }}</button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <!-- ИСТОРИЯ -->
+    <sc-if value="{{ isHistory }}" hint-placeholder-val="{{ false }}">
+      <div style="padding-top:28px;max-width:860px">
+        <h1 style="margin:0 0 6px;font-size:28px;letter-spacing:-.02em;font-weight:700">{{ t.navHistory }}</h1>
+        <p style="margin:0 0 20px;color:var(--muted);font-size:15px">{{ t.historySub }}</p>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+          <input placeholder="{{ t.searchPlaceholder }}" style="flex:1;min-width:220px;height:42px;padding:0 14px;border:1px solid var(--line);background:var(--surface);border-radius:12px;font-size:14px;outline:none" style-focus="border-color:var(--accent)" />
+          <select value="{{ filter }}" onChange="{{ onFilterChange }}" style="height:42px;padding:0 12px;border:1px solid var(--line);background:var(--surface);border-radius:12px;font-size:14px;color:var(--ink);cursor:pointer;outline:none">
+            <sc-for list="{{ filters }}" as="fl" hint-placeholder-count="4">
+              <option value="{{ fl.k }}">{{ fl.label }}</option>
+            </sc-for>
+          </select>
+        </div>
+
+        <sc-if value="{{ historyEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px dashed var(--line);border-radius:16px;padding:48px 24px;text-align:center">
+            <div style="width:44px;height:44px;border-radius:12px;background:var(--surface-2);margin:0 auto 14px"></div>
+            <div style="font-weight:600;margin-bottom:6px">{{ t.historyEmptyTitle }}</div>
+            <div style="color:var(--muted);font-size:14px;margin-bottom:16px">{{ t.historyEmptyBody }}</div>
+            <button onClick="{{ newThread }}" style="height:40px;padding:0 18px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:10px;font-weight:600;cursor:pointer">{{ t.askQuestion }}</button>
+          </div>
+        </sc-if>
+
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ threads }}" as="th" hint-placeholder-count="5">
+            <div style="display:flex;gap:8px;align-items:stretch">
+              <button onClick="{{ th.open }}" style="flex:1;text-align:left;display:flex;gap:14px;align-items:flex-start;padding:16px;border:1px solid var(--line);background:var(--surface);border-radius:14px;cursor:pointer;color:var(--ink);box-shadow:var(--shadow);min-width:0" style-hover="border-color:var(--accent)">
+                <span style="{{ th.dotStyle }}"></span>
+                <span style="flex:1;min-width:0">
+                  <span style="display:block;font-weight:600;font-size:15px;margin-bottom:4px;text-wrap:pretty">{{ th.title }}</span>
+                  <span style="display:block;font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ th.preview }}</span>
+                  <span style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted)">
+                    <span style="{{ th.badgeStyle }}">{{ th.status }}</span>
+                    <span>{{ th.date }}</span>
+                    <span>{{ th.msgs }}</span>
+                  </span>
+                </span>
+              </button>
+              <button onClick="{{ th.remove }}" title="{{ t.deleteAction }}" style="width:44px;flex:none;border:1px solid var(--line);background:var(--surface);border-radius:14px;cursor:pointer;display:grid;place-items:center;color:var(--muted)" style-hover="border-color:var(--danger);color:var(--danger)">
+                <span style="width:12px;height:12px;position:relative;display:block">
+                  <span style="position:absolute;left:0;top:5px;width:12px;height:2px;background:currentColor;transform:rotate(45deg)"></span>
+                  <span style="position:absolute;left:0;top:5px;width:12px;height:2px;background:currentColor;transform:rotate(-45deg)"></span>
+                </span>
+              </button>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ТАРИФЫ -->
+    <sc-if value="{{ isTariffs }}" hint-placeholder-val="{{ false }}">
+      <div style="padding-top:28px;max-width:820px">
+        <h1 style="margin:0 0 4px;font-size:26px;letter-spacing:-.02em;font-weight:700">{{ t.tariffsTitle }}</h1>
+        <p style="margin:0 0 22px;color:var(--muted);font-size:14px;text-wrap:pretty">{{ t.tariffsSub }}</p>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:20px">
+          <sc-for list="{{ bundleTariffs }}" as="b" hint-placeholder-count="4">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+                <div style="font-weight:600;font-size:14px">{{ b.name }}</div>
+                <sc-if value="{{ b.discountLabel }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:10px;padding:2px 7px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:600">{{ b.discountLabel }}</div>
+                </sc-if>
+              </div>
+              <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:14px;flex:1">{{ b.includesText }}</div>
+              <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:14px">
+                <div style="font-size:22px;font-weight:700;letter-spacing:-.02em">{{ b.priceLabel }}</div>
+                <sc-if value="{{ b.hasDiscount }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:13px;color:var(--muted);text-decoration:line-through">{{ b.baseLabel }}</div>
+                </sc-if>
+              </div>
+              <button onClick="{{ b.buy }}" style="width:100%;height:40px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:10px;font-size:14px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.buy }}</button>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:16px 18px;border:1px dashed var(--line);border-radius:14px">
+          <div style="flex:1;min-width:220px">
+            <div style="font-weight:600;font-size:15px;margin-bottom:2px">{{ t.customTitle }}</div>
+            <div style="font-size:13px;color:var(--muted);text-wrap:pretty">{{ t.customSub }}</div>
+          </div>
+          <button onClick="{{ openCustom }}" style="height:40px;padding:0 16px;border:1px solid var(--line);background:transparent;border-radius:10px;font-weight:600;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">{{ t.customCta }}</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- НАСТРОЙКИ -->
+    <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+      <div style="padding-top:28px;max-width:860px">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <h1 style="margin:0;font-size:28px;letter-spacing:-.02em;font-weight:700">{{ t.navSettings }}</h1>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;padding:4px 9px;border-radius:999px;background:var(--warn-soft);color:var(--warn)">{{ t.adminBadge }}</span>
+        </div>
+        <p style="margin:0 0 20px;color:var(--muted);font-size:15px;text-wrap:pretty">{{ t.settingsSub }}</p>
+
+        <div style="display:flex;gap:24px;align-items:flex-start">
+          <div style="display:flex;flex-direction:column;gap:2px;width:172px;flex:none">
+            <sc-for list="{{ settingsTabs }}" as="tab" hint-placeholder-count="2">
+              <button onClick="{{ tab.pick }}" style="{{ tab.style }}">{{ tab.label }}</button>
+            </sc-for>
+          </div>
+
+          <div style="flex:1;min-width:0">
+            <sc-if value="{{ isPromptsTab }}" hint-placeholder-val="{{ true }}">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)">
+              <div style="font-weight:700;font-size:17px;margin-bottom:14px">{{ t.promptsTitle }}</div>
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <sc-for list="{{ prompts }}" as="pr" hint-placeholder-count="2">
+                  <label style="display:block">
+                    <span style="display:block;font-size:14px;font-weight:600;margin-bottom:4px">{{ pr.label }}</span>
+                    <span style="display:block;font-size:12px;color:var(--muted);margin-bottom:8px">{{ pr.hint }}</span>
+                    <textarea rows="6" defaultValue="{{ pr.value }}" style="width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--bg);font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.6;resize:vertical;outline:none" style-focus="border-color:var(--accent)"></textarea>
+                  </label>
+                </sc-for>
+              </div>
+              <div style="display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap">
+                <button onClick="{{ savePrompts }}" style="height:40px;padding:0 18px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:10px;font-weight:600;cursor:pointer" style-hover="opacity:.9">{{ t.save }}</button>
+                <span style="font-size:13px;color:var(--accent)">{{ savedNote }}</span>
+              </div>
+            </div>
+            </sc-if>
+
+            <sc-if value="{{ isTariffsTab }}" hint-placeholder-val="{{ false }}">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow);margin-bottom:14px">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+                <div>
+                  <div style="font-weight:700;font-size:17px;margin-bottom:4px">{{ t.servicesTitle }}</div>
+                  <div style="font-size:13px;color:var(--muted)">{{ t.servicesSub }}</div>
+                </div>
+                <button style="height:36px;padding:0 14px;border:1px dashed var(--line);background:transparent;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;color:var(--ink);flex:none" style-hover="border-color:var(--accent)">+ {{ t.addService }}</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ adminServices }}" as="s" hint-placeholder-count="2">
+                  <div style="border:1px solid var(--line);border-radius:12px;padding:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;align-items:end">
+                    <label style="display:block">
+                      <span style="display:block;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-bottom:4px">{{ t.fServiceType }}</span>
+                      <input defaultValue="{{ s.typeLabel }}" style="width:100%;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-size:13px;outline:none" style-focus="border-color:var(--accent)" />
+                    </label>
+                    <label style="display:block">
+                      <span style="display:block;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-bottom:4px">{{ t.fServiceName }}</span>
+                      <input defaultValue="{{ s.name }}" style="width:100%;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-size:13px;outline:none" style-focus="border-color:var(--accent)" />
+                    </label>
+                    <label style="display:block">
+                      <span style="display:block;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-bottom:4px">{{ t.fUnitPrice }}</span>
+                      <input defaultValue="{{ s.priceRaw }}" style="width:100%;height:36px;padding:0 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg);font-size:13px;outline:none" style-focus="border-color:var(--accent)" />
+                    </label>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+                <div>
+                  <div style="font-weight:700;font-size:17px;margin-bottom:4px">{{ t.bundlesTitle }}</div>
+                  <div style="font-size:13px;color:var(--muted)">{{ t.bundlesSub }}</div>
+                </div>
+                <button onClick="{{ addBundle }}" style="height:36px;padding:0 14px;border:1px dashed var(--line);background:transparent;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;color:var(--ink);flex:none" style-hover="border-color:var(--accent)">+ {{ t.addTariff }}</button>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px">
+                <sc-for list="{{ adminBundles }}" as="b" hint-placeholder-count="4">
+                  <div style="position:relative;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px">
+                    <div style="position:absolute;top:10px;right:10px;display:flex;gap:4px">
+                      <button onClick="{{ b.edit }}" title="{{ t.editAction }}" style="width:28px;height:28px;border:1px solid var(--line);background:var(--bg);border-radius:8px;cursor:pointer;display:grid;place-items:center;color:var(--muted)" style-hover="border-color:var(--accent);color:var(--accent)">
+                        <span style="width:11px;height:11px;border:2px solid currentColor;border-radius:2px 2px 2px 0;display:block;transform:rotate(-45deg)"></span>
+                      </button>
+                      <button onClick="{{ b.remove }}" title="{{ t.deleteAction }}" style="width:28px;height:28px;border:1px solid var(--line);background:var(--bg);border-radius:8px;cursor:pointer;display:grid;place-items:center;color:var(--muted)" style-hover="border-color:var(--danger);color:var(--danger)">
+                        <span style="width:11px;height:11px;position:relative;display:block">
+                          <span style="position:absolute;left:0;top:5px;width:11px;height:2px;background:currentColor;transform:rotate(45deg)"></span>
+                          <span style="position:absolute;left:0;top:5px;width:11px;height:2px;background:currentColor;transform:rotate(-45deg)"></span>
+                        </span>
+                      </button>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-right:64px">
+                      <div style="font-weight:600;font-size:14px">{{ b.name }}</div>
+                      <sc-if value="{{ b.hasDiscount }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:10px;padding:2px 7px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:600">{{ b.discountLabel }}</div>
+                      </sc-if>
+                    </div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px">{{ b.includesText }}</div>
+                    <div style="display:flex;align-items:baseline;gap:8px">
+                      <div style="font-size:20px;font-weight:700;letter-spacing:-.02em">{{ b.priceLabel }}</div>
+                      <sc-if value="{{ b.hasDiscount }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:12px;color:var(--muted);text-decoration:line-through">{{ b.baseLabel }}</div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            </sc-if>
+
+            <sc-if value="{{ isAnalyticsTab }}" hint-placeholder-val="{{ false }}">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)">
+              <div style="font-weight:700;font-size:17px;margin-bottom:4px">{{ t.analyticsTitle }}</div>
+              <div style="font-size:13px;color:var(--muted);margin-bottom:18px">{{ t.analyticsSub }}</div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
+                <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
+                  <div style="font-size:12px;color:var(--muted);margin-bottom:6px">{{ t.metricTotal }}</div>
+                  <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">{{ analytics.total }}</div>
+                </div>
+                <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
+                  <div style="font-size:12px;color:var(--muted);margin-bottom:6px">{{ t.metricAvgTime }}</div>
+                  <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">{{ analytics.avgTime }}</div>
+                </div>
+                <div style="border:1px solid var(--line);border-radius:12px;padding:14px">
+                  <div style="font-size:12px;color:var(--muted);margin-bottom:6px">{{ t.metricSatisfaction }}</div>
+                  <div style="font-size:26px;font-weight:700;letter-spacing:-.02em">{{ analytics.satisfaction }}</div>
+                </div>
+              </div>
+
+              <div style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.03em;text-transform:uppercase;margin-bottom:10px">{{ t.byStatusTitle }}</div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ analytics.byStatus }}" as="row" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="{{ row.dotStyle }}"></span>
+                    <span style="width:120px;font-size:13px;flex:none">{{ row.label }}</span>
+                    <div style="flex:1;height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden">
+                      <div style="{{ row.barStyle }}"></div>
+                    </div>
+                    <span style="width:32px;text-align:right;font-size:13px;font-weight:600">{{ row.count }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+
+  <!-- КОМПОЗЕР -->
+  <sc-if value="{{ isChat }}" hint-placeholder-val="{{ true }}">
+    <div style="position:fixed;left:0;right:0;bottom:0;background:linear-gradient(to top,var(--bg) 62%,transparent);padding:14px 16px 16px;z-index:15">
+      <div style="max-width:760px;margin:0 auto">
+        <sc-if value="{{ recording }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:10px 14px;border:1px solid var(--accent);background:var(--surface);border-radius:12px">
+            <span style="width:9px;height:9px;border-radius:50%;background:var(--danger);animation:zanPulse 1.2s infinite"></span>
+            <span style="font-size:13px;color:var(--muted)">{{ t.recording }}</span>
+            <button onClick="{{ stopRec }}" style="margin-left:auto;height:30px;padding:0 12px;border:1px solid var(--line);background:transparent;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;color:var(--ink)">{{ t.stopRec }}</button>
+          </div>
+        </sc-if>
+        <div style="display:flex;align-items:flex-end;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:24px;box-shadow:var(--shadow);padding:6px 6px 6px 8px">
+          <button title="{{ t.attach }}" style="width:38px;height:38px;flex:none;display:grid;place-items:center;border:none;background:transparent;border-radius:50%;cursor:pointer;color:var(--muted)" style-hover="background:var(--surface-2);color:var(--ink)">
+            <span style="position:relative;width:16px;height:16px;display:block">
+              <span style="position:absolute;left:0;right:0;top:50%;height:2px;background:currentColor;transform:translateY(-50%);border-radius:1px"></span>
+              <span style="position:absolute;top:0;bottom:0;left:50%;width:2px;background:currentColor;transform:translateX(-50%);border-radius:1px"></span>
+            </span>
+          </button>
+          <textarea rows="1" value="{{ draft }}" onChange="{{ onDraft }}" placeholder="{{ t.composerPlaceholder }}" style="flex:1;min-width:0;border:none;outline:none;background:transparent;resize:none;font-size:15px;line-height:1.5;padding:9px 2px;max-height:120px"></textarea>
+          <button onClick="{{ startRec }}" title="{{ t.voice }}" style="{{ micBtnStyle }}" style-hover="background:var(--surface-2)">
+            <span style="position:relative;width:14px;height:16px;display:block">
+              <span style="position:absolute;left:50%;top:0;transform:translateX(-50%);width:8px;height:10px;border-radius:5px;border:2px solid currentColor"></span>
+              <span style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:12px;height:2px;border-radius:1px;background:currentColor"></span>
+            </span>
+          </button>
+          <button onClick="{{ openPay }}" style="width:38px;height:38px;flex:none;display:grid;place-items:center;border:none;background:var(--accent);color:var(--accent-ink);border-radius:50%;font-size:17px;cursor:pointer" style-hover="opacity:.9">↑</button>
+        </div>
+        <div style="text-align:center;font-size:11px;color:var(--muted);margin-top:8px;text-wrap:pretty">{{ t.footerDisclaimer }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- МОДАЛКА ПОДТВЕРЖДЕНИЯ -->
+  <sc-if value="{{ confirmOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:60;background:rgba(10,14,13,.5);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.28)">
+        <div style="font-size:17px;font-weight:700;margin-bottom:8px">{{ t.confirmTitle }}</div>
+        <p style="margin:0 0 18px;font-size:14px;color:var(--muted);text-wrap:pretty">{{ confirmMessage }}</p>
+        <div style="display:flex;gap:8px">
+          <button onClick="{{ confirmCancel }}" style="flex:1;height:42px;border:1px solid var(--line);background:transparent;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">{{ t.cancel }}</button>
+          <button onClick="{{ confirmYes }}" style="flex:1;height:42px;border:none;background:var(--danger);color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.deleteAction }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- МОДАЛКА РЕДАКТИРОВАНИЯ ТАРИФА -->
+  <sc-if value="{{ bundleModalOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:45;background:rgba(10,14,13,.45);display:flex;align-items:flex-end;justify-content:center;padding:16px">
+      <div style="width:100%;max-width:440px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.28);margin-bottom:6vh">
+        <div style="font-size:19px;font-weight:700;letter-spacing:-.02em;margin-bottom:16px">{{ bundleModalTitle }}</div>
+
+        <label style="display:block;margin-bottom:12px">
+          <span style="display:block;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-bottom:4px">{{ t.fName }}</span>
+          <input value="{{ bundleForm.name }}" onChange="{{ bundleForm.onName }}" style="width:100%;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-size:14px;outline:none" style-focus="border-color:var(--accent)" />
+        </label>
+        <label style="display:block;margin-bottom:16px">
+          <span style="display:block;font-size:11px;font-family:'IBM Plex Mono',monospace;color:var(--muted);margin-bottom:4px">{{ t.fDiscount }}</span>
+          <input type="number" min="0" max="90" value="{{ bundleForm.discount }}" onChange="{{ bundleForm.onDiscount }}" style="width:100%;height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);font-size:14px;outline:none" style-focus="border-color:var(--accent)" />
+        </label>
+
+        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+          <sc-for list="{{ bundleForm.rows }}" as="r" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:10px 12px">
+              <div style="flex:1;font-size:14px;min-width:0">{{ r.serviceName }}</div>
+              <button onClick="{{ r.dec }}" style="width:30px;height:30px;flex:none;border-radius:50%;border:1px solid var(--line);background:transparent;font-size:16px;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">−</button>
+              <input type="number" min="0" value="{{ r.qty }}" onChange="{{ r.onInput }}" style="width:52px;height:32px;text-align:center;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:14px;outline:none" style-focus="border-color:var(--accent)" />
+              <button onClick="{{ r.inc }}" style="width:30px;height:30px;flex:none;border-radius:50%;border:1px solid var(--line);background:transparent;font-size:16px;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">+</button>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:16px;background:var(--bg)">
+          <span style="font-size:14px">{{ t.total }}</span>
+          <strong style="font-size:16px">{{ bundleForm.priceLabel }}</strong>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onClick="{{ saveBundle }}" style="height:46px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:12px;font-size:15px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.save }}</button>
+          <button onClick="{{ closeBundleModal }}" style="height:42px;border:none;background:transparent;color:var(--muted);border-radius:12px;font-size:14px;font-weight:600;cursor:pointer" style-hover="color:var(--ink)">{{ t.cancel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- МОДАЛКА ОПЛАТЫ -->
+  <sc-if value="{{ payOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:40;background:rgba(10,14,13,.45);display:flex;align-items:flex-end;justify-content:center;padding:16px">
+      <div style="width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.28);margin-bottom:6vh">
+        <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:6px">{{ t.payTitle }}</div>
+        <p style="margin:0 0 16px;font-size:14px;color:var(--muted);text-wrap:pretty">{{ payLine1Text }}</p>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:16px;background:var(--bg)">
+          <span style="font-size:14px">{{ t.payAmount }}</span>
+          <strong style="font-size:18px">{{ priceLabel }}</strong>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onClick="{{ payNow }}" style="height:48px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:12px;font-size:15px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.payCard }}</button>
+          <button onClick="{{ closePay }}" style="height:44px;border:none;background:transparent;color:var(--muted);border-radius:12px;font-size:14px;font-weight:600;cursor:pointer" style-hover="color:var(--ink)">{{ t.cancel }}</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);text-align:center;margin-top:12px">{{ t.payNote }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- МОДАЛКА СВОЕГО ТАРИФА -->
+  <sc-if value="{{ customOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:40;background:rgba(10,14,13,.45);display:flex;align-items:flex-end;justify-content:center;padding:16px">
+      <div style="width:100%;max-width:440px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.28);margin-bottom:6vh">
+        <div style="font-size:20px;font-weight:700;letter-spacing:-.02em;margin-bottom:6px">{{ t.customModalTitle }}</div>
+        <p style="margin:0 0 18px;font-size:14px;color:var(--muted);text-wrap:pretty">{{ t.customModalSub }}</p>
+
+        <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:16px">
+          <sc-for list="{{ customRows }}" as="r" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:12px;padding:10px 12px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600">{{ r.label }}</div>
+                <div style="font-size:12px;color:var(--muted)">{{ r.unitLabel }}</div>
+              </div>
+              <button onClick="{{ r.dec }}" style="width:30px;height:30px;flex:none;border-radius:50%;border:1px solid var(--line);background:transparent;font-size:16px;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">−</button>
+              <input type="number" min="0" value="{{ r.qty }}" onChange="{{ r.onInput }}" style="width:52px;height:32px;text-align:center;border:1px solid var(--line);border-radius:8px;background:var(--bg);font-size:14px;outline:none" style-focus="border-color:var(--accent)" />
+              <button onClick="{{ r.inc }}" style="width:30px;height:30px;flex:none;border-radius:50%;border:1px solid var(--line);background:transparent;font-size:16px;cursor:pointer;color:var(--ink)" style-hover="border-color:var(--accent)">+</button>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:16px;background:var(--bg)">
+          <span style="font-size:14px">{{ t.customTotalLabel }}</span>
+          <strong style="font-size:18px">{{ customTotalLabel }}</strong>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button onClick="{{ payCustom }}" style="height:48px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:12px;font-size:15px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.payCard }}</button>
+          <button onClick="{{ closeCustom }}" style="height:44px;border:none;background:transparent;color:var(--muted);border-radius:12px;font-size:14px;font-weight:600;cursor:pointer" style-hover="color:var(--ink)">{{ t.cancel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ОНБОРДИНГ -->
+  <sc-if value="{{ onbOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:50;background:rgba(10,14,13,.5);display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="width:100%;max-width:460px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:26px;box-shadow:0 24px 70px rgba(0,0,0,.3)">
+        <div style="width:34px;height:34px;border-radius:10px;background:var(--accent);margin-bottom:16px"></div>
+        <div style="font-size:23px;font-weight:700;letter-spacing:-.025em;margin-bottom:8px;text-wrap:pretty">{{ t.onbTitle }}</div>
+        <p style="margin:0 0 18px;font-size:15px;color:var(--muted);text-wrap:pretty">{{ t.onbSub }}</p>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
+          <sc-for list="{{ onbSteps }}" as="s" hint-placeholder-count="3">
+            <div style="display:flex;gap:12px;align-items:flex-start">
+              <span style="width:24px;height:24px;border-radius:8px;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:700;display:grid;place-items:center;flex:none;font-family:'IBM Plex Mono',monospace">{{ s.n }}</span>
+              <span style="font-size:14px;line-height:1.5;text-wrap:pretty">{{ s.text }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.55;padding:12px 14px;border-radius:12px;background:var(--surface-2);margin-bottom:16px;text-wrap:pretty">{{ t.disclaimer }}</div>
+        <button onClick="{{ closeOnb }}" style="width:100%;height:48px;border:none;background:var(--accent);color:var(--accent-ink);border-radius:12px;font-size:15px;font-weight:700;cursor:pointer" style-hover="opacity:.9">{{ t.onbCta }}</button>
+      </div>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;firstRunDisclaimer&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Поведение&quot;},&quot;startOnThread&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Поведение&quot;},&quot;sourcesOpenByDefault&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Поведение&quot;},&quot;consultationPrice&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:2900,&quot;min&quot;:500,&quot;max&quot;:20000,&quot;step&quot;:100,&quot;unit&quot;:&quot;₸&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Оплата&quot;,&quot;description&quot;:&quot;Цена за один запрос вопрос-ответ&quot;},&quot;documentPrice&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:4900,&quot;min&quot;:500,&quot;max&quot;:30000,&quot;step&quot;:100,&quot;unit&quot;:&quot;₸&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Оплата&quot;,&quot;description&quot;:&quot;Цена за один документ&quot;}}">
+const RU = {
+  tagline: "юридический ассистент · РК",
+  navChat: "Чат", navHistory: "История", navTariffs: "Тарифы", navSettings: "Настройки",
+  newThread: "Новая консультация",
+  threadMeta: "ТРЕД #2481 · УТОЧНЕНИЯ БЕСПЛАТНЫ",
+  emptyTitle: "Опишите свою ситуацию — объясним, что говорит закон",
+  emptySub: "Отвечаем простым языком и показываем, на каких статьях основан ответ.",
+  composerPlaceholder: "Опишите ситуацию своими словами…",
+  attach: "Файл", voice: "Голос",
+  recording: "Говорите — текст появится в поле ввода", stopRec: "Готово",
+  footerDisclaimer: "Zan даёт справочную информацию и не заменяет юриста.",
+  assistant: "ZAN · ОТВЕТ",
+  msg1: "Работодатель не отдаёт трудовую книжку после увольнения. Что делать?",
+  ans1a: "Работодатель обязан выдать трудовую книжку и справку о работе в день прекращения договора. Задержка — нарушение, за него предусмотрен штраф.",
+  ans1b: "Сначала отправьте письменное требование (лучше заказным письмом с уведомлением). Если в течение 3 рабочих дней ответа нет — обращайтесь в инспекцию труда вашей области, а затем в суд. Срок обращения по трудовому спору — 1 год со дня, когда вы узнали о нарушении.",
+  sourcesToggle: "Показать статьи закона",
+  helpful: "Полезно", notHelpful: "Не помогло",
+  freeFollowup: "УТОЧНЕНИЯ — БЕСПЛАТНО",
+  msg2: "Проверьте, пожалуйста, этот договор аренды",
+  ans2: "Договор в целом стандартный, но есть три пункта, на которые стоит обратить внимание перед подписанием:",
+  docReady: "ДОКУМЕНТ ГОТОВ",
+  docTitle: "Претензия работодателю о выдаче трудовой книжки",
+  docSub: "1 страница · заполнено по вашему диалогу · остались поля: дата, подпись",
+  downloadPdf: "Скачать PDF", downloadDocx: "Скачать Word", editDoc: "Исправить",
+  historySub: "Обращения хранятся здесь. Откройте тред, чтобы продолжить разговор.",
+  searchPlaceholder: "Поиск по обращениям",
+  historyEmptyTitle: "Пока нет обращений",
+  historyEmptyBody: "Здесь появятся ваши консультации — с ответами и документами.",
+  askQuestion: "Задать вопрос",
+  tariffsTitle: "Тарифы",
+  tariffsSub: "Готовые пакеты для вопросов и для документов — или свой набор с точным количеством.",
+  buy: "Купить", requestsLabel: "запросов",
+  qaCategory: "Вопрос-ответ", docCategory: "Подготовка документов",
+  qaNounForms: ["запрос", "запроса", "запросов"], docNounForms: ["документ", "документа", "документов"],
+  customTitle: "Свой набор запросов",
+  customSub: "Укажите нужное количество вопросов и документов вручную.",
+  customCta: "Выбрать количество",
+  customModalTitle: "Свой набор запросов",
+  customModalSub: "Укажите, сколько вопросов и документов нужно, и оплатите картой.",
+  customTotalLabel: "К оплате",
+  tabPrompts: "Промпты", tabTariffs: "Тарифы",
+  adminBadge: "ВРЕМЕННО ДОСТУПНО ВСЕМ",
+  settingsSub: "Системные промпты агентов и тарифы. Раздел будет скрыт под роль администратора.",
+  promptsTitle: "Промпты агентов",
+  save: "Сохранить", addService: "Добавить услугу", addTariff: "Добавить тариф",
+  editAction: "Изменить", deleteAction: "Удалить",
+  newTariffTitle: "Новый тариф", editTariffTitle: "Изменить тариф",
+  confirmTitle: "Подтвердите удаление",
+  confirmDeleteTariff: "Тариф будет удалён и больше не появится в списке. Действие нельзя отменить.",
+  confirmDeleteThread: "Обращение и его переписка будут удалены без возможности восстановления.",
+  tabAnalytics: "Аналитика",
+  analyticsTitle: "Аналитика обращений",
+  analyticsSub: "Данные показаны за последние 30 дней.",
+  metricTotal: "Всего запросов", metricAvgTime: "Среднее время ответа", metricSatisfaction: "Доля «полезно»",
+  byStatusTitle: "По статусам",
+  servicesTitle: "Услуги", bundlesTitle: "Тарифы (наборы услуг)",
+  servicesSub: "Базовые услуги и цена за одну единицу.",
+  bundlesSub: "Соберите тариф из услуг и, если нужно, дайте скидку.",
+  tariffAdminTitle: "Управление тарифами", tariffAdminSub: "Сначала опишите услуги и их цену, затем соберите из них тарифы со скидкой.",
+  fServiceType: "ТИП УСЛУГИ", fServiceName: "НАЗВАНИЕ УСЛУГИ", fUnitPrice: "ЦЕНА, ₸",
+  fName: "НАЗВАНИЕ ТАРИФА", fDiscount: "СКИДКА, %", total: "Сумма",
+  payTitle: "Оплата",
+  payAmount: "К оплате",
+  payLine1: "Консультация юридического ассистента",
+  payCard: "Оплатить картой", cancel: "Отмена",
+  payNote: "Демонстрационная оплата — деньги не списываются.",
+  onbTitle: "Понятные ответы по законам Казахстана",
+  onbSub: "Опишите ситуацию обычными словами — получите ответ и ссылки на статьи закона.",
+  disclaimer: "Zan — справочный сервис. Ответы основаны на действующем законодательстве РК, но не являются юридической консультацией и не заменяют обращение к адвокату по сложным делам.",
+  onbCta: "Понятно, начать",
+  statuses: { queued: "В очереди", processing: "Обрабатывается", clarify: "Ждёт уточнения", done: "Готово", error: "Ошибка", canceled: "Отменён" },
+  filterAll: "Все"
+};
+
+const KZ = {
+  tagline: "заң көмекшісі · ҚР",
+  navChat: "Чат", navHistory: "Тарих", navTariffs: "Тарифтер", navSettings: "Баптаулар",
+  newThread: "Жаңа кеңес",
+  threadMeta: "ТРЕД #2481 · НАҚТЫЛАУ ТЕГІН",
+  emptyTitle: "Жағдайыңызды жазыңыз — заң не дейтінін түсіндіреміз",
+  emptySub: "Қарапайым тілмен жауап береміз және негіз болған баптарды көрсетеміз.",
+  composerPlaceholder: "Жағдайды өз сөзіңізбен жазыңыз…",
+  attach: "Файл", voice: "Дауыс",
+  recording: "Сөйлеңіз — мәтін енгізу жолында пайда болады", stopRec: "Дайын",
+  footerDisclaimer: "Zan анықтамалық ақпарат береді және заңгерді алмастырмайды.",
+  assistant: "ZAN · ЖАУАП",
+  msg1: "Жұмыс беруші жұмыстан шыққаннан кейін еңбек кітапшасын бермей жатыр. Не істеу керек?",
+  ans1a: "Жұмыс беруші еңбек шарты тоқтатылған күні еңбек кітапшасы мен жұмыс туралы анықтаманы беруге міндетті. Кешіктіру — бұзушылық, ол үшін айыппұл көзделген.",
+  ans1b: "Алдымен жазбаша талап жіберіңіз (хабарламасы бар тапсырыс хатпен жақсы). 3 жұмыс күні ішінде жауап болмаса — облыстық еңбек инспекциясына, содан кейін сотқа жүгініңіз. Еңбек дауы бойынша жүгіну мерзімі — бұзушылықты білген күннен бастап 1 жыл.",
+  sourcesToggle: "Заң баптарын көрсету",
+  helpful: "Пайдалы", notHelpful: "Көмектеспеді",
+  freeFollowup: "НАҚТЫЛАУ — ТЕГІН",
+  msg2: "Осы жалдау шартын тексеріп беріңізші",
+  ans2: "Шарт негізінен стандартты, бірақ қол қоймас бұрын назар аударатын үш тармақ бар:",
+  docReady: "ҚҰЖАТ ДАЙЫН",
+  docTitle: "Еңбек кітапшасын беру туралы жұмыс берушіге талап",
+  docSub: "1 бет · диалогыңыз бойынша толтырылды · қалған өрістер: күні, қолы",
+  downloadPdf: "PDF жүктеу", downloadDocx: "Word жүктеу", editDoc: "Түзету",
+  historySub: "Өтініштер осында сақталады. Әңгімені жалғастыру үшін тредті ашыңыз.",
+  searchPlaceholder: "Өтініштерден іздеу",
+  historyEmptyTitle: "Әзірге өтініш жоқ",
+  historyEmptyBody: "Мұнда сіздің кеңестеріңіз — жауаптар мен құжаттармен бірге көрінеді.",
+  askQuestion: "Сұрақ қою",
+  tariffsTitle: "Тарифтер",
+  tariffsSub: "Сұрақ пен құжат үшін дайын пакеттер — немесе өз санын таңдаңыз.",
+  buy: "Сатып алу", requestsLabel: "сұраныс",
+  qaCategory: "Сұрақ-жауап", docCategory: "Құжат дайындау",
+  qaNounForms: ["сұраныс", "сұраныс", "сұраныс"], docNounForms: ["құжат", "құжат", "құжат"],
+  customTitle: "Өз санын таңдау",
+  customSub: "Қажетті сұрақ пен құжат санын өзіңіз көрсетіңіз.",
+  customCta: "Санын таңдау",
+  customModalTitle: "Өз санын таңдау",
+  customModalSub: "Қанша сұрақ және құжат керегін көрсетіп, картамен төлеңіз.",
+  customTotalLabel: "Төленетін сома",
+  tabPrompts: "Промпттар", tabTariffs: "Тарифтер",
+  adminBadge: "УАҚЫТША БАРЛЫҒЫНА АШЫҚ",
+  settingsSub: "Агенттердің жүйелік промпттары және тарифтер. Бөлім әкімші рөліне жабылады.",
+  promptsTitle: "Агент промпттары",
+  save: "Сақтау", addService: "Қызмет қосу", addTariff: "Тариф қосу",
+  editAction: "Өзгерту", deleteAction: "Жою",
+  newTariffTitle: "Жаңа тариф", editTariffTitle: "Тарифті өзгерту",
+  confirmTitle: "Жоюды растаңыз",
+  confirmDeleteTariff: "Тариф жойылады және тізімде көрінбейді. Бұл әрекетті болдырмау мүмкін емес.",
+  confirmDeleteThread: "Өтініш пен оның хат-хабары қайтарылмастай жойылады.",
+  tabAnalytics: "Аналитика",
+  analyticsTitle: "Өтініштер аналитикасы",
+  analyticsSub: "Деректер соңғы 30 күн бойынша көрсетілген.",
+  metricTotal: "Барлық сұраныстар", metricAvgTime: "Орташа жауап уақыты", metricSatisfaction: "«Пайдалы» үлесі",
+  byStatusTitle: "Статустар бойынша",
+  servicesTitle: "Қызметтер", bundlesTitle: "Тарифтер (қызметтер жиынтығы)",
+  servicesSub: "Негізгі қызметтер және бір бірлік бағасы.",
+  bundlesSub: "Қызметтерден тариф құрастырыңыз, қажет болса жеңілдік беріңіз.",
+  tariffAdminTitle: "Тарифтерді басқару", tariffAdminSub: "Алдымен қызметтер мен бағасын сипаттаңыз, содан кейін оларданен жеңілдікпен тариф құрастырыңыз.",
+  fServiceType: "ҚЫЗМЕТ ТҮРІ", fServiceName: "ҚЫЗМЕТ АТАУЫ", fUnitPrice: "БАҒАСЫ, ₸",
+  fName: "ТАРИФ АТАУЫ", fDiscount: "ЖЕҢІЛДІК, %", total: "Сома",
+  payTitle: "Төлем",
+  payAmount: "Төленетін сома",
+  payLine1: "Заң көмекшісінің кеңесі",
+  payCard: "Картамен төлеу", cancel: "Болдырмау",
+  payNote: "Демонстрациялық төлем — ақша алынбайды.",
+  onbTitle: "Қазақстан заңдары бойынша түсінікті жауаптар",
+  onbSub: "Жағдайды қарапайым сөзбен жазыңыз — жауап пен заң баптарына сілтеме аласыз.",
+  disclaimer: "Zan — анықтамалық қызмет. Жауаптар ҚР қолданыстағы заңнамасына негізделген, бірақ заң кеңесі болып саналмайды және күрделі істерде адвокатқа жүгінуді алмастырмайды.",
+  onbCta: "Түсінікті, бастау",
+  statuses: { queued: "Кезекте", processing: "Өңделуде", clarify: "Нақтылауды күтуде", done: "Дайын", error: "Қате", canceled: "Тоқтатылған" },
+  filterAll: "Барлығы"
+};
+
+const SOURCES = {
+  ru: [
+    { ref: "Трудовой кодекс РК, ст. 62, п. 4", quote: "Работодатель обязан выдать работнику трудовую книжку и иные документы, связанные с трудовой деятельностью, в день прекращения трудового договора." },
+    { ref: "КоАП РК, ст. 86", quote: "Нарушение работодателем порядка оформления прекращения трудового договора влечёт предупреждение или штраф." },
+    { ref: "Трудовой кодекс РК, ст. 160", quote: "Срок обращения по индивидуальным трудовым спорам — один год со дня, когда лицо узнало о нарушении своего права." }
+  ],
+  kz: [
+    { ref: "ҚР Еңбек кодексі, 62-бап, 4-т.", quote: "Жұмыс беруші еңбек шарты тоқтатылған күні қызметкерге еңбек кітапшасын және еңбекке қатысты өзге де құжаттарды беруге міндетті." },
+    { ref: "ҚР ӘҚБтК, 86-бап", quote: "Жұмыс берушінің еңбек шартын тоқтатуды ресімдеу тәртібін бұзуы ескерту немесе айыппұл салуға әкеп соғады." },
+    { ref: "ҚР Еңбек кодексі, 160-бап", quote: "Жеке еңбек даулары бойынша жүгіну мерзімі — құқығының бұзылғанын білген күннен бастап бір жыл." }
+  ]
+};
+
+const FINDINGS = {
+  ru: [
+    { title: "Пункт 4.2 — повышение платы", body: "Арендодатель может поднять плату раз в 3 месяца без согласия. Разумно ограничить: не чаще раза в год и не более чем на уровень инфляции." },
+    { title: "Пункт 6.1 — залог", body: "Условия возврата залога не описаны. Пропишите срок возврата (например, 5 рабочих дней) и закрытый перечень удержаний." },
+    { title: "Пункт 8.3 — досрочное расторжение", body: "Право расторгнуть договор есть только у арендодателя. Это дисбаланс — попросите симметричное условие с уведомлением за 30 дней." }
+  ],
+  kz: [
+    { title: "4.2-тармақ — төлемді көтеру", body: "Жалға беруші келісімсіз 3 айда бір рет төлемді көтере алады. Шектеген жөн: жылына бір реттен жиі емес және инфляция деңгейінен аспайтындай." },
+    { title: "6.1-тармақ — кепілақы", body: "Кепілақыны қайтару шарттары жазылмаған. Қайтару мерзімін (мысалы, 5 жұмыс күні) және ұстау тізімін нақты көрсетіңіз." },
+    { title: "8.3-тармақ — мерзімінен бұрын бұзу", body: "Шартты бұзу құқығы тек жалға берушіде. Бұл теңгерімсіздік — 30 күн бұрын хабарлаумен симметриялы шарт сұраңыз." }
+  ]
+};
+
+const THREADS = {
+  ru: [
+    { title: "Работодатель не отдаёт трудовую книжку", preview: "Претензия готова, можно скачать в PDF или Word", status: "done", date: "14.09.2026", msgs: "8 сообщений" },
+    { title: "Проверка договора аренды помещения", preview: "Нужен скан второй страницы договора — без него не видно условия залога", status: "clarify", date: "12.09.2026", msgs: "5 сообщений" },
+    { title: "Регистрация ИП: какой налоговый режим выбрать", preview: "Ассистент готовит ответ…", status: "processing", date: "12.09.2026", msgs: "2 сообщения" },
+    { title: "Раздел имущества при разводе", preview: "Запрос в очереди, обычно занимает до 2 минут", status: "queued", date: "11.09.2026", msgs: "1 сообщение" },
+    { title: "Штраф за просрочку уплаты налога", preview: "Не удалось обработать запрос — оплата возвращена на баланс", status: "error", date: "03.09.2026", msgs: "3 сообщения" },
+    { title: "Оформление сотрудника-иностранца", preview: "Обращение отменено до оплаты", status: "canceled", date: "28.08.2026", msgs: "1 сообщение" }
+  ],
+  kz: [
+    { title: "Жұмыс беруші еңбек кітапшасын бермей жатыр", preview: "Талап дайын, PDF немесе Word форматында жүктеуге болады", status: "done", date: "14.09.2026", msgs: "8 хабарлама" },
+    { title: "Үй-жайды жалдау шартын тексеру", preview: "Шарттың екінші бетінің сканы қажет — кепілақы шарты көрінбейді", status: "clarify", date: "12.09.2026", msgs: "5 хабарлама" },
+    { title: "ЖК тіркеу: қандай салық режимін таңдау керек", preview: "Көмекші жауап дайындап жатыр…", status: "processing", date: "12.09.2026", msgs: "2 хабарлама" },
+    { title: "Ажырасу кезінде мүлікті бөлу", preview: "Сұрау кезекте, әдетте 2 минутқа дейін", status: "queued", date: "11.09.2026", msgs: "1 хабарлама" },
+    { title: "Салықты кешіктіргені үшін айыппұл", preview: "Сұрауды өңдеу мүмкін болмады — төлем балансқа қайтарылды", status: "error", date: "03.09.2026", msgs: "3 хабарлама" },
+    { title: "Шетелдік қызметкерді ресімдеу", preview: "Өтініш төлемге дейін тоқтатылды", status: "canceled", date: "28.08.2026", msgs: "1 хабарлама" }
+  ]
+};
+
+const CATEGORY_MAX = { qa: 20, doc: 20 };
+
+const SERVICES = {
+  ru: [
+    { id: "qa", typeLabel: "Консультация", name: "Вопрос-ответ", price: 2900 },
+    { id: "doc", typeLabel: "Документ", name: "Подготовка документа", price: 4900 }
+  ],
+  kz: [
+    { id: "qa", typeLabel: "Кеңес", name: "Сұрақ-жауап", price: 2900 },
+    { id: "doc", typeLabel: "Құжат", name: "Құжат дайындау", price: 4900 }
+  ]
+};
+
+const BUNDLES = {
+  ru: [
+    { id: "b1", name: "1 вопрос", discount: 0, items: [{ serviceId: "qa", qty: 1 }] },
+    { id: "b2", name: "Пакет вопросов", discount: 15, items: [{ serviceId: "qa", qty: 3 }] },
+    { id: "b3", name: "Вопрос + документ", discount: 10, items: [{ serviceId: "qa", qty: 2 }, { serviceId: "doc", qty: 1 }] },
+    { id: "b4", name: "Для бизнеса", discount: 25, items: [{ serviceId: "qa", qty: 10 }, { serviceId: "doc", qty: 3 }] }
+  ],
+  kz: [
+    { id: "b1", name: "1 сұрақ", discount: 0, items: [{ serviceId: "qa", qty: 1 }] },
+    { id: "b2", name: "Сұрақ пакеті", discount: 15, items: [{ serviceId: "qa", qty: 3 }] },
+    { id: "b3", name: "Сұрақ + құжат", discount: 10, items: [{ serviceId: "qa", qty: 2 }, { serviceId: "doc", qty: 1 }] },
+    { id: "b4", name: "Бизнес үшін", discount: 25, items: [{ serviceId: "qa", qty: 10 }, { serviceId: "doc", qty: 3 }] }
+  ]
+};
+
+const PROMPTS = {
+  ru: [
+    { label: "Агент «Вопрос-ответ»", hint: "Системный промпт основного агента: тон, обязательные цитаты, ограничения.", value: "Ты — юридический ассистент по законодательству Республики Казахстан. Отвечай простым языком, без канцелярита, короткими абзацами. Всегда указывай конкретные статьи нормативных актов, на которых основан ответ. Если данных недостаточно — задай один уточняющий вопрос. Не давай гарантий исхода дела и рекомендуй обратиться к адвокату в сложных случаях." },
+    { label: "Агент «Работа с документами»", hint: "Промпт для анализа загруженных файлов и генерации документов.", value: "Ты анализируешь документы (договоры, решения, справки) по праву РК и готовишь новые документы: заявления, претензии, договоры. При анализе выделяй риски по пунктам с указанием номера пункта. При генерации соблюдай официальную структуру документа и оставляй поля для даты и подписи." }
+  ],
+  kz: [
+    { label: "«Сұрақ-жауап» агенті", hint: "Негізгі агенттің жүйелік промпты: тон, міндетті дәйексөздер, шектеулер.", value: "Сен — Қазақстан Республикасы заңнамасы бойынша заң көмекшісісің. Қарапайым тілмен, қысқа абзацтармен жауап бер. Жауаптың негізі болған нақты баптарды әрқашан көрсет. Дерек жеткіліксіз болса — бір нақтылау сұрағын қой. Іс нәтижесіне кепілдік берме, күрделі жағдайда адвокатқа жүгінуді ұсын." },
+    { label: "«Құжаттармен жұмыс» агенті", hint: "Жүктелген файлдарды талдау және құжат дайындау промпты.", value: "Сен ҚР құқығы бойынша құжаттарды (шарттар, шешімдер, анықтамалар) талдайсың және жаңа құжаттар дайындайсың: өтініштер, талаптар, шарттар. Талдау кезінде тәуекелдерді тармақ нөмірімен көрсет. Дайындау кезінде ресми құрылымды сақта, күні мен қолы үшін орын қалдыр." }
+  ]
+};
+
+const ONB = {
+  ru: [
+    { n: "1", text: "Опишите ситуацию своими словами — текстом, голосом или приложите документ." },
+    { n: "2", text: "Оплата списывается один раз за обращение. Уточнять внутри него можно сколько угодно." },
+    { n: "3", text: "Получите ответ со ссылками на статьи закона, при необходимости — готовый документ." }
+  ],
+  kz: [
+    { n: "1", text: "Жағдайды өз сөзіңізбен жазыңыз — мәтінмен, дауыспен немесе құжат тіркеңіз." },
+    { n: "2", text: "Төлем бір өтініш үшін бір рет алынады. Оның ішінде қалағаныңызша нақтылаңыз." },
+    { n: "3", text: "Заң баптарына сілтемесі бар жауап, қажет болса — дайын құжат аласыз." }
+  ]
+};
+
+const STATUS_COLOR = { queued: "var(--muted)", processing: "var(--accent)", clarify: "var(--warn)", done: "var(--accent)", error: "var(--danger)", canceled: "var(--muted)" };
+
+class Component extends DCLogic {
+  state = {
+    screen: "chat", view: "empty", lang: "ru", theme: "light",
+    sourcesOpen: false, vote: null, recording: false, settingsTab: "prompts",
+    payOpen: false, onbOpen: true, draft: "", filter: "all", saved: false,
+    customOpen: false, customQty: { qa: 1, doc: 1 }, pendingPurchase: null,
+    bundleOverrides: {}, deletedBundleIds: [], editingBundleId: null, editingBundleIsNew: false,
+    bundleForm: null, deletedThreadIds: [], pendingConfirm: null
+  };
+
+  componentDidMount() {
+    if (this.props.firstRunDisclaimer === false) this.setState({ onbOpen: false });
+    if (this.props.startOnThread) this.setState({ view: "thread" });
+    if (this.props.sourcesOpenByDefault) this.setState({ sourcesOpen: true });
+  }
+
+  nav(s, active) {
+    return "height:34px;padding:0 13px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;border:1px solid " +
+      (active ? "var(--accent)" : "transparent") + ";background:" + (active ? "var(--accent-soft)" : "transparent") +
+      ";color:" + (active ? "var(--accent)" : "var(--muted)");
+  }
+
+  renderVals() {
+    const st = this.state;
+    const t = st.lang === "ru" ? RU : KZ;
+    const L = st.lang;
+    const price = this.props.consultationPrice ?? 2900;
+    const set = (o) => this.setState(o);
+    const units = { qa: price, doc: this.props.documentPrice ?? 4900 };
+
+    return {
+      t, theme: st.theme,
+      langLabel: L === "ru" ? "Рус" : "Қаз",
+      toggleLang: () => set({ lang: L === "ru" ? "kz" : "ru" }),
+      toggleTheme: () => set({ theme: st.theme === "light" ? "dark" : "light" }),
+
+      isChat: st.screen === "chat", isHistory: st.screen === "history",
+      isTariffs: st.screen === "tariffs", isSettings: st.screen === "settings",
+      toChat: () => set({ screen: "chat" }), toHistory: () => set({ screen: "history" }),
+      toTariffs: () => set({ screen: "tariffs" }), toSettings: () => set({ screen: "settings" }),
+      navChatStyle: this.nav(0, st.screen === "chat"),
+      navHistoryStyle: this.nav(0, st.screen === "history"),
+      navTariffsStyle: this.nav(0, st.screen === "tariffs"),
+      navSettingsStyle: this.nav(0, st.screen === "settings"),
+
+      isEmpty: st.view === "empty", hasThread: st.view === "thread",
+      newThread: () => set({ screen: "chat", view: "empty", draft: "", sourcesOpen: false, vote: null }),
+      priceLabel: (st.pendingPurchase ? st.pendingPurchase.price : price).toLocaleString("ru-RU") + " ₸",
+      threadMeta: t.threadMeta,
+
+      draft: st.draft,
+      onDraft: (e) => set({ draft: e.target.value }),
+
+      sources: SOURCES[L], findings: FINDINGS[L], onbSteps: ONB[L],
+      sourcesOpen: st.sourcesOpen,
+      toggleSources: () => set({ sourcesOpen: !st.sourcesOpen }),
+      caretStyle: "width:0;height:0;border-left:5px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent;display:block;transition:transform .15s;transform:rotate(" + (st.sourcesOpen ? "90deg" : "0deg") + ")",
+      voteUp: () => set({ vote: st.vote === "up" ? null : "up" }),
+      voteDown: () => set({ vote: st.vote === "down" ? null : "down" }),
+      upStyle: this.chip(st.vote === "up"), downStyle: this.chip(st.vote === "down"),
+
+      recording: st.recording,
+      startRec: () => {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          navigator.mediaDevices.getUserMedia({ audio: true })
+            .then((stream) => { stream.getTracks().forEach((tr) => tr.stop()); set({ recording: true }); })
+            .catch(() => set({ recording: true }));
+        } else {
+          set({ recording: true });
+        }
+      },
+      stopRec: () => set({ recording: false, draft: st.draft + (st.draft ? " " : "") + t.msg1 }),
+      micBtnStyle: "width:38px;height:38px;flex:none;display:grid;place-items:center;border:none;border-radius:50%;cursor:pointer;color:" +
+        (st.recording ? "var(--accent-ink)" : "var(--muted)") + ";background:" + (st.recording ? "var(--accent)" : "transparent"),
+
+      payOpen: st.payOpen,
+      openPay: () => set({ pendingPurchase: { label: t.payLine1, price, kind: "consult" }, payOpen: true }),
+      closePay: () => set({ payOpen: false, pendingPurchase: null }),
+      payLine1Text: st.pendingPurchase ? st.pendingPurchase.label : t.payLine1,
+      payNow: () => {
+        const kind = st.pendingPurchase && st.pendingPurchase.kind;
+        set({ payOpen: false, pendingPurchase: null, ...(kind === "consult" ? { view: "thread", draft: "" } : {}) });
+      },
+
+      onbOpen: st.onbOpen, closeOnb: () => set({ onbOpen: false }),
+
+      filter: st.filter,
+      onFilterChange: (e) => set({ filter: e.target.value }),
+      filters: [{ k: "all", label: t.filterAll }, { k: "done", label: t.statuses.done }, { k: "clarify", label: t.statuses.clarify }, { k: "processing", label: t.statuses.processing }],
+      threads: THREADS[L].filter((x, i) => !st.deletedThreadIds.includes(i) && (st.filter === "all" || x.status === st.filter)).map((x, i) => ({
+        ...x, key: i, status: t.statuses[x.status],
+        dotStyle: "width:9px;height:9px;border-radius:50%;flex:none;margin-top:7px;display:block;background:" + STATUS_COLOR[x.status],
+        badgeStyle: "padding:2px 8px;border-radius:999px;background:var(--surface-2);color:" + STATUS_COLOR[x.status],
+        open: () => set({ screen: "chat", view: "thread" }),
+        remove: () => set({ pendingConfirm: { message: t.confirmDeleteThread, run: () => set({ deletedThreadIds: [...this.state.deletedThreadIds, THREADS[L].indexOf(x)] }) } })
+      })),
+      historyEmpty: THREADS[L].filter((x, i) => !st.deletedThreadIds.includes(i) && (st.filter === "all" || x.status === st.filter)).length === 0,
+
+      confirmOpen: !!st.pendingConfirm,
+      confirmMessage: st.pendingConfirm ? st.pendingConfirm.message : "",
+      confirmCancel: () => set({ pendingConfirm: null }),
+      confirmYes: () => { if (st.pendingConfirm) st.pendingConfirm.run(); this.setState({ pendingConfirm: null }); },
+
+      bundleTariffs: this.liveBundles(L).map((b, i) => this.bundleVals(b, i, SERVICES[L], units, t, set)),
+      adminServices: SERVICES[L].map((s, i) => ({ ...s, key: i, priceRaw: String(units[s.id] ?? s.price) })),
+      adminBundles: this.liveBundles(L).map((b, i) => ({
+        ...this.bundleVals(b, i, SERVICES[L], units, t, set),
+        edit: () => this.openBundleModal(b.id, SERVICES[L]),
+        remove: () => set({ pendingConfirm: { message: t.confirmDeleteTariff, run: () => set({ deletedBundleIds: [...this.state.deletedBundleIds, b.id] }) } })
+      })),
+      addBundle: () => this.openBundleModal(null, SERVICES[L]),
+
+      bundleModalOpen: !!st.bundleForm,
+      bundleModalTitle: st.editingBundleIsNew ? t.newTariffTitle : t.editTariffTitle,
+      bundleForm: st.bundleForm ? this.bundleFormVals(SERVICES[L], units, t) : { name: "", discount: 0, rows: [], priceLabel: "" },
+      closeBundleModal: () => set({ bundleForm: null, editingBundleId: null }),
+      saveBundle: () => this.commitBundle(SERVICES[L]),
+
+      customOpen: st.customOpen,
+      openCustom: () => set({ customOpen: true }),
+      closeCustom: () => set({ customOpen: false }),
+      customRows: ["qa", "doc"].map((k) => this.customRowVals(k, units[k], st.customQty[k], t, set)),
+      customTotalLabel: (st.customQty.qa * units.qa + st.customQty.doc * units.doc).toLocaleString("ru-RU") + " ₸",
+      payCustom: () => set({ customOpen: false, customQty: { qa: 1, doc: 1 } }),
+
+      prompts: PROMPTS[L].map((p, i) => ({ ...p, key: i })),
+      savePrompts: () => { this.setState({ saved: true }); setTimeout(() => this.setState({ saved: false }), 2200); },
+      savedNote: st.saved ? (L === "ru" ? "Сохранено в бэкенде" : "Бэкендте сақталды") : "",
+
+      isPromptsTab: st.settingsTab === "prompts", isTariffsTab: st.settingsTab === "tariffs",
+      isAnalyticsTab: st.settingsTab === "analytics",
+      settingsTabs: [{ k: "prompts", label: t.tabPrompts }, { k: "tariffs", label: t.tabTariffs }, { k: "analytics", label: t.tabAnalytics }]
+        .map((tab) => ({ ...tab, pick: () => set({ settingsTab: tab.k }), style: this.settingsTabStyle(st.settingsTab === tab.k) })),
+      analytics: this.analyticsVals(t)
+    };
+  }
+
+  chip(active) {
+    return "height:32px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid " +
+      (active ? "var(--accent)" : "var(--line)") + ";background:" + (active ? "var(--accent-soft)" : "transparent") +
+      ";color:" + (active ? "var(--accent)" : "var(--muted)");
+  }
+
+  analyticsVals(t) {
+    const rows = [
+      { key: "done", label: t.statuses.done, count: 812, color: "var(--accent)" },
+      { key: "processing", label: t.statuses.processing, count: 96, color: "var(--accent)" },
+      { key: "clarify", label: t.statuses.clarify, count: 64, color: "var(--warn)" },
+      { key: "queued", label: t.statuses.queued, count: 21, color: "var(--muted)" },
+      { key: "error", label: t.statuses.error, count: 18, color: "var(--danger)" },
+      { key: "canceled", label: t.statuses.canceled, count: 9, color: "var(--muted)" }
+    ];
+    const max = Math.max(...rows.map((r) => r.count));
+    return {
+      total: "1 020",
+      avgTime: "38 сек",
+      satisfaction: "92%",
+      byStatus: rows.map((r) => ({
+        ...r,
+        dotStyle: "width:8px;height:8px;border-radius:50%;flex:none;display:block;background:" + r.color,
+        barStyle: "height:100%;border-radius:4px;background:" + r.color + ";width:" + Math.round((r.count / max) * 100) + "%"
+      }))
+    };
+  }
+
+  settingsTabStyle(active) {
+    return "text-align:left;height:40px;padding:0 14px;border-radius:10px;border:none;font-size:14px;font-weight:600;cursor:pointer;background:" +
+      (active ? "var(--accent-soft)" : "transparent") + ";color:" + (active ? "var(--accent)" : "var(--muted)");
+  }
+
+  qtyNounLabel(qty, serviceId, t) {
+    const forms = serviceId === "qa" ? t.qaNounForms : t.docNounForms;
+    const noun = this.state.lang === "ru" ? this.pluralRu(qty, forms) : forms[0];
+    return qty + " " + noun;
+  }
+
+  pluralRu(n, forms) {
+    const n10 = n % 10, n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) return forms[0];
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return forms[1];
+    return forms[2];
+  }
+
+  liveBundles(L) {
+    const st = this.state;
+    return BUNDLES[L]
+      .filter((b) => !st.deletedBundleIds.includes(b.id))
+      .map((b) => (st.bundleOverrides[b.id] ? { ...b, ...st.bundleOverrides[b.id] } : b))
+      .concat((st.bundleOverrides.__new || []).filter((b) => !st.deletedBundleIds.includes(b.id)));
+  }
+
+  openBundleModal(id, services) {
+    const st = this.state;
+    let base;
+    if (id) {
+      base = this.liveBundles(this.currentLang()).find((b) => b.id === id) || { id, name: "", discount: 0, items: [] };
+    } else {
+      base = { id: "new_" + Date.now(), name: "", discount: 0, items: [] };
+    }
+    const items = {};
+    services.forEach((s) => { items[s.id] = (base.items.find((it) => it.serviceId === s.id) || {}).qty || 0; });
+    this.setState({ editingBundleId: base.id, editingBundleIsNew: !id, bundleForm: { name: base.name, discount: base.discount, items } });
+  }
+
+  currentLang() { return this.state.lang; }
+
+  commitBundle(services) {
+    const st = this.state;
+    const items = services.map((s) => ({ serviceId: s.id, qty: st.bundleForm.items[s.id] || 0 })).filter((it) => it.qty > 0);
+    const entry = { id: st.editingBundleId, name: st.bundleForm.name, discount: st.bundleForm.discount, items };
+    if (st.editingBundleIsNew) {
+      const list = (st.bundleOverrides.__new || []).concat([entry]);
+      this.setState({ bundleOverrides: { ...st.bundleOverrides, __new: list }, bundleForm: null, editingBundleId: null });
+    } else {
+      this.setState({ bundleOverrides: { ...st.bundleOverrides, [entry.id]: entry }, bundleForm: null, editingBundleId: null });
+    }
+  }
+
+  bundleFormVals(services, units, t) {
+    const st = this.state;
+    const f = st.bundleForm;
+    const set = (o) => this.setState(o);
+    const subtotal = services.reduce((sum, s) => sum + (units[s.id] ?? s.price) * (f.items[s.id] || 0), 0);
+    const total = Math.round((subtotal * (1 - (f.discount || 0) / 100)) / 10) * 10;
+    return {
+      name: f.name,
+      discount: f.discount,
+      priceLabel: (f.discount > 0 ? total : subtotal).toLocaleString("ru-RU") + " ₸" + (f.discount > 0 ? " (" + subtotal.toLocaleString("ru-RU") + " ₸)" : ""),
+      onName: (e) => set({ bundleForm: { ...f, name: e.target.value } }),
+      onDiscount: (e) => set({ bundleForm: { ...f, discount: Math.max(0, Math.min(90, parseInt(e.target.value, 10) || 0)) } }),
+      rows: services.map((s) => {
+        const qty = f.items[s.id] || 0;
+        const setQty = (v) => set({ bundleForm: { ...f, items: { ...f.items, [s.id]: Math.max(0, Math.min(20, v)) } } });
+        return { key: s.id, serviceName: s.name, qty, dec: () => setQty(qty - 1), inc: () => setQty(qty + 1), onInput: (e) => setQty(parseInt(e.target.value, 10) || 0) };
+      })
+    };
+  }
+
+  bundleVals(b, i, services, units, t, set) {
+    const byId = {};
+    services.forEach((s) => { byId[s.id] = s; });
+    const subtotal = b.items.reduce((sum, it) => sum + (units[it.serviceId] ?? byId[it.serviceId].price) * it.qty, 0);
+    const total = Math.round((subtotal * (1 - b.discount / 100)) / 10) * 10;
+    const includesText = b.items.map((it) => this.qtyNounLabel(it.qty, it.serviceId, t)).join(", ");
+    const hasDiscount = b.discount > 0;
+    return {
+      ...b, key: i,
+      includesText,
+      hasDiscount,
+      discountLabel: hasDiscount ? "−" + b.discount + "%" : "",
+      priceLabel: (hasDiscount ? total : subtotal).toLocaleString("ru-RU") + " ₸",
+      baseLabel: subtotal.toLocaleString("ru-RU") + " ₸",
+      buy: () => set({ payOpen: true, pendingPurchase: { label: b.name, price: hasDiscount ? total : subtotal, kind: "tariff" } })
+    };
+  }
+
+  customRowVals(key, unit, qty, t, set) {
+    const forms = key === "qa" ? t.qaNounForms : t.docNounForms;
+    const clamp = (v) => Math.max(0, Math.min(CATEGORY_MAX[key], v));
+    return {
+      key,
+      label: key === "qa" ? t.qaCategory : t.docCategory,
+      unitLabel: unit.toLocaleString("ru-RU") + " ₸ за " + forms[0],
+      qty,
+      dec: () => set({ customQty: { ...this.state.customQty, [key]: clamp(qty - 1) } }),
+      inc: () => set({ customQty: { ...this.state.customQty, [key]: clamp(qty + 1) } }),
+      onInput: (e) => set({ customQty: { ...this.state.customQty, [key]: clamp(parseInt(e.target.value, 10) || 0) } })
+    };
+  }
+}
+
+</script>
+</body>
+</html>

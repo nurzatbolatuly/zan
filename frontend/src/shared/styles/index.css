@@ -1,0 +1,89 @@
+/* @import обязан идти первым правилом в файле (кроме @charset) — иначе невалидный CSS */
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: theme("fontFamily.sans");
+  -webkit-font-smoothing: antialiased;
+}
+
+/**
+ * Высота нижнего таб-бара (MobileNav) — 0 от md и выше, где нав уходит в шапку.
+ * AppShell резервирует под неё padding-bottom, композер чата (Stage 1) должен
+ * позиционироваться от неё же (см. комментарий в app/layout/MobileNav.tsx).
+ */
+:root {
+  --mobile-nav-h: 60px;
+}
+@media (min-width: 768px) {
+  :root {
+    --mobile-nav-h: 0px;
+  }
+}
+
+/* Composer прижат к низу экрана — на iOS учитываем home-indicator (PLAN.md Stage 5) */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Индикатор записи голоса (эквивалент zanPulse из Zan.dc.html:34) */
+@keyframes zan-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.animate-zan-pulse {
+  animation: zan-pulse 1.2s infinite;
+}
+
+/**
+ * Spotlight-градиент (FRONT_DESIGN_SYSTEM.md §1) — фон для Card tone="spotlight",
+ * единственной "цепляющей взгляд" карточки на экране (например, "свой набор"
+ * в Тарифах). Кастомный CSS, не Tailwind-утилита — Tailwind не умеет анимировать
+ * background-position без произвольных плагинов, а класс используется в одном месте.
+ */
+@keyframes spotlight-shift {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+.tone-spotlight {
+  background: linear-gradient(
+    120deg,
+    var(--spotlight-1),
+    var(--spotlight-2),
+    var(--spotlight-3)
+  );
+  background-size: 200% 200%;
+  animation: spotlight-shift 8s ease-in-out infinite;
+}
+
+/* FRONT_DESIGN_SYSTEM.md §7 / PLAN.md Stage 5 — движение уважает системную настройку */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

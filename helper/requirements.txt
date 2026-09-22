@@ -1,0 +1,24 @@
+# Только для Docker-слоя зависимостей (см. Dockerfile) — pip не может
+# установить рантайм-зависимости hatchling-пакета из pyproject.toml без
+# исходников самого пакета (app/), что ломает кэширование Docker-слоя.
+# Источник истины по версиям — [project.dependencies] в pyproject.toml;
+# при изменении зависимостей там — обновить и здесь в том же PR.
+grpcio>=1.84,<2
+grpcio-reflection>=1.84,<2
+starlette>=0.48,<1
+uvicorn[standard]>=0.38,<1
+structlog>=25.4,<26
+pydantic-settings>=2.11,<3
+boto3>=1.43,<2
+httpx>=0.28,<1
+pymupdf>=1.28,<2
+python-docx>=1.2,<2
+pytesseract>=0.3,<1
+pdf2image>=1.17,<2
+pillow>=12,<13
+faster-whisper>=1.2,<2
+docxtpl>=0.20,<1
+weasyprint>=70,<71
+asyncpg>=0.31,<1
+alembic>=1.20,<2
+fastembed>=0.8,<1

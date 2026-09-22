@@ -1,0 +1,77 @@
+/**
+ * Источник истины — FRONT_DESIGN_SYSTEM.md §1 (цвет) и §5 (тень).
+ * Значения переносятся отсюда, не подбираются заново в компонентах.
+ * Менять значение → сначала FRONT_DESIGN_SYSTEM.md, потом этот файл (см. §10 того документа).
+ */
+
+[data-theme="light"] {
+  --bg: #fbfaf8;
+  --surface: #ffffff;
+  --surface-2: #f3f1ec;
+  --ink: #15191a;
+  --muted: #6b7370;
+  --line: #e5e2dc;
+  --accent: #2f6f5e;
+  --accent-ink: #ffffff;
+  --accent-soft: #e9f1ed;
+  --warn: #8a5a1e;
+  --warn-soft: #f6eee2;
+  --danger: #98342b;
+  --spotlight-1: #e9f1ed;
+  --spotlight-2: #f6eee2;
+  --spotlight-3: #e8eef6;
+
+  --shadow-card: 0 1px 2px rgba(20, 25, 23, 0.05), 0 8px 24px rgba(20, 25, 23, 0.05);
+}
+
+[data-theme="dark"] {
+  --bg: #111413;
+  --surface: #191d1b;
+  --surface-2: #212624;
+  --ink: #ecefec;
+  --muted: #99a19d;
+  --line: #2b302e;
+  --accent: #55a98f;
+  --accent-ink: #0e1413;
+  --accent-soft: #1c2724;
+  --warn: #d2a165;
+  --warn-soft: #2a2419;
+  --danger: #e0796d;
+  --spotlight-1: #1c2724;
+  --spotlight-2: #2a2419;
+  --spotlight-3: #1b2430;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+/* Тень модалок — фиксированная, не завязана на тему (FRONT_DESIGN_SYSTEM.md §5) */
+:root {
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.28);
+}
+
+/**
+ * Fallback до того, как useThemeStore проставит data-theme на <html>
+ * (первый рендер / отключённый JS) — берём системную тему, чтобы не было
+ * вспышки светлой темы на тёмных системах (PLAN.md Stage 0, п.2).
+ * Как только data-theme появляется, он перекрывает этот блок по специфичности.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #111413;
+    --surface: #191d1b;
+    --surface-2: #212624;
+    --ink: #ecefec;
+    --muted: #99a19d;
+    --line: #2b302e;
+    --accent: #55a98f;
+    --accent-ink: #0e1413;
+    --accent-soft: #1c2724;
+    --warn: #d2a165;
+    --warn-soft: #2a2419;
+    --danger: #e0796d;
+    --spotlight-1: #1c2724;
+    --spotlight-2: #2a2419;
+    --spotlight-3: #1b2430;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+}

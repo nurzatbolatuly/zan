@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package zan.rpc.v1;
+
+import "zan/rpc/v1/common.proto";
+
+option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
+
+// SttService — распознавание речи (BACKEND_PLAN.md §3, Stage 4). Вызывается
+// синхронно из POST /voice/transcribe (zan-backend-tz-v2.md §4.7) — клиент
+// ждёт текст до отправки сообщения в тред.
+service SttService {
+  rpc Transcribe(TranscribeRequest) returns (TranscribeResponse);
+}
+
+// TranscribeRequest — file_url по тому же принципу, что ExtractRequest
+// (files.proto). lang — необязательная подсказка провайдеру
+// (domain.Session.Language на стороне Go, BACKEND_PLAN.md §6 п.2);
+// LANG_UNSPECIFIED — провайдер определяет язык сам.
+message TranscribeRequest {
+  string file_url = 1;
+  string mime_type = 2;
+  Lang lang = 3;
+}
+
+// TranscribeResponse.text — уже обрезанный/тримленный текст. Пустая строка
+// (тишина) — не ошибка на этом уровне, backend решает, что с ней делать
+// (zan-backend-tz-v3.md §5.4: "не расслышал, повторите").
+message TranscribeResponse {
+  string text = 1;
+}

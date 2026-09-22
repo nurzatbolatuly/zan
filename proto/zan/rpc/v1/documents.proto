@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package zan.rpc.v1;
+
+option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
+
+// DocumentsService — рендер документа из структурированного черновика
+// (BACKEND_PLAN.md §3, Stage 4 — базовый рендер-пайплайн; вызывающий
+// юзкейс "Агент Документы" — Stage 6). Всегда возвращает ссылку на готовый
+// файл, никогда бинарь (BACKEND_PLAN.md §3.1) — закрывает двусмысленность
+// исходного HTTP-варианта контракта одним явным вариантом.
+service DocumentsService {
+  rpc Render(RenderRequest) returns (RenderResponse);
+}
+
+enum RenderFormat {
+  RENDER_FORMAT_UNSPECIFIED = 0;
+  RENDER_FORMAT_PDF = 1;
+  RENDER_FORMAT_DOCX = 2;
+}
+
+// DocumentSection — та же форма, что domain.Finding в Go (zan-backend-tz-v2.md
+// §2.7: `[{title, body}]`) — черновик документа собирается из тех же
+// структурированных находок, которые агент уже возвращает в чат.
+message DocumentSection {
+  string title = 1;
+  string body = 2;
+}
+
+message RenderRequest {
+  string title = 1;
+  repeated DocumentSection sections = 2;
+  RenderFormat format = 3;
+}
+
+// RenderResponse — file_url готов к немедленной отдаче клиенту (presigned,
+// короткого времени жизни); object_key — стабильная ссылка на объект в
+// хранилище для того, кто должен пережить истечение presigned-ссылки и
+// перевыпустить свежую позже (Stage 6: FileAttachment(purpose=generated_output)
+// хранит именно object_key, не file_url).
+message RenderResponse {
+  string file_url = 1;
+  string object_key = 2;
+}

@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package zan.rpc.v1;
+
+option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
+
+// RagService — поиск релевантных источников (статей закона) по базе НПА
+// (BACKEND_PLAN.md §3, Stage 5 — "ядро v4"). Единственный RPC, синхронный —
+// вызывается из internal/agent непосредственно перед сборкой промпта для
+// LLM (backend-roadmap.md §1.4, шаг 2). Владеет и мигрирует данные, по
+// которым ищет, только Python (схема rag, pgvector) — Go никогда не
+// подключается к этой схеме напрямую, только через этот RPC
+// (BACKEND_PLAN.md §1.3).
+service RagService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// SearchRequest.query_text — текст вопроса (+ конкатенированный контекст
+// треда собирает вызывающая сторона, internal/agent, до вызова — сюда
+// приходит уже готовая строка, не история сообщений целиком, см.
+// internal/agent.buildRagQuery). top_k — сколько кандидатов вернуть,
+// решает вызывающая сторона (не хардкодится на стороне Python), чтобы
+// смена значения не требовала передеплоя helper/.
+message SearchRequest {
+  string query_text = 1;
+  int32 top_k = 2;
+}
+
+// SearchMatch — кандидат-источник: ref/quote — та же форма, что
+// domain.Source в Go (zan-backend-tz-v2.md §2.7: "[{ref, quote}]") — Go
+// сверяет то, что процитировала LLM, с этим списком (verifySources,
+// backend-roadmap.md §1.4 "риск"), не с сырым текстом чанка. score —
+// оценка релевантности (cosine similarity, 0..1, выше — релевантнее) —
+// Go сам решает, что из кандидатов реально положить в промпт (BACKEND_PLAN.md
+// §1.1: "Go сам решает, что из этого передать в промпт LLM"), Python не
+// фильтрует и не обрезает список сверх top_k.
+message SearchMatch {
+  string ref = 1;
+  string quote = 2;
+  float score = 3;
+}
+
+// SearchResponse.matches — пустой список (не ошибка) — легитимный исход,
+// когда в корпусе ничего релевантного не нашлось; Go в этом случае просто
+// вызывает LLM без RAG-контекста (деградация, не блокировка, см.
+// grpcclient.IsUnavailable — но это другой случай: helper ответил, просто
+// нечем).
+message SearchResponse {
+  repeated SearchMatch matches = 1;
+}

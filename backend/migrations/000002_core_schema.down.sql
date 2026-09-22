@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS core.agent_prompts;
+DROP TABLE IF EXISTS core.file_attachments;
+DROP TABLE IF EXISTS core.messages;
+DROP TABLE IF EXISTS core.threads;
+DROP TABLE IF EXISTS core.payments;
+DROP TABLE IF EXISTS core.user_credits;
+DROP TABLE IF EXISTS core.tariffs;
+DROP TABLE IF EXISTS core.services;
+DROP TABLE IF EXISTS core.sessions;
+DROP SCHEMA IF EXISTS core;

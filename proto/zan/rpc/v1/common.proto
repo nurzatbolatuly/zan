@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// Пакет назывался "zan.internal.v1" (директория proto/zan/internal/v1/) до
+// Stage 4 — переименован в "zan.rpc.v1", т.к. buf генерирует Go-код с
+// paths=source_relative (backend/internal/genproto/<путь .proto файла>), и
+// директория "internal" ВНУТРИ уже-internal `backend/internal/` создавала
+// собственную Go-границу видимости: сгенерированный пакет оказывался
+// импортируемым только из кода под .../genproto/zan/..., а не из остального
+// backend/internal/* (обнаружено при первой попытке импортировать
+// сгенерированный клиент из internal/grpcclient — см. BACKEND_LOG.md,
+// Stage 4). "internal" как имя директории — зарезервированное для Go слово,
+// не стоит использовать его повторно внутри уже-internal дерева.
+package zan.rpc.v1;
+
+option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
+
+// TraceContext — сквозной идентификатор запроса, прикладывается ко всем
+// будущим RPC-запросам Go -> Python (RagService/FilesService/DocumentsService/
+// SttService, см. BACKEND_PLAN.md §3). trace_id совпадает с X-Trace-Id,
+// который фронт шлёт на Go (BACKEND_CODING_STANDARDS.md §4.3).
+//
+// На Stage 0 сообщение ничем не использовалось — только проверяло, что
+// кодогенерация Go/Python работает end-to-end на общем .proto (DoD Stage 0,
+// BACKEND_PLAN.md). trace_id/session_id по-прежнему передаются в
+// gRPC-метадате клиентским interceptor'ом (internal/grpcclient), не через
+// это сообщение — см. BACKEND_LOG.md, запись Stage 0 (#71). Остальные общие
+// типы добавляются сюда по мере появления первого реального RPC, которому
+// они нужны — не заводятся заранее "про запас".
+message TraceContext {
+  string trace_id = 1;
+  optional string session_id = 2;
+}
+
+// Lang — предпочитаемый язык сессии (domain.Language в Go,
+// zan-backend-tz-v3.md §2.2), передаётся туда, где Python-стороне нужен
+// языковой контекст (SttService.Transcribe — Stage 4; RagService.Search —
+// Stage 5). Первый потребитель — stt.proto.
+enum Lang {
+  LANG_UNSPECIFIED = 0;
+  LANG_RU = 1;
+  LANG_KZ = 2;
+}

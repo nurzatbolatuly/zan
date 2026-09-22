@@ -1,0 +1,1493 @@
+openapi: 3.0.3
+info:
+  title: Zan Backend API
+  version: "1"
+  description: >
+    Публичный REST/JSON контракт Go↔Frontend (BACKEND_PLAN.md §1.1).
+    Единственный источник правды для путей/схем — фронт (instructions.md,
+    "Общий словарь FE↔BE") сверяется с этим файлом, не с кодом напрямую.
+    Контракт Go↔Python — отдельно, gRPC (proto/), сюда не попадает.
+    Пополняется по стадиям BACKEND_PLAN.md — Stage 1 описал /sessions/* и
+    /admin/ping, Stage 2 добавил услуги/тарифы/баланс/оплату-заглушку,
+    Stage 3 добавляет треды/сообщения (агент — StubAgent, зафиксированная
+    во всех ответах фраза-заглушка, реальный LLM — Stage 5).
+
+servers:
+  - url: /
+
+security: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness-проба процесса
+      description: >
+        Не бизнес-эндпоинт — "процесс жив", не "готов обслуживать трафик".
+        Проверок зависимостей (БД/S3/helper) не делает.
+      tags: [infra]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [ok] }
+
+  /sessions:
+    post:
+      summary: Создать новую анонимную сессию
+      description: >
+        zan-backend-tz-v3.md §2.1/§4. Токен возвращается и в теле ответа
+        (мобильный клиент — Authorization: Session <token>), и в
+        Set-Cookie session_token (httpOnly, SameSite=Lax, Secure вне dev).
+        Ограничено rate-limit по IP (BACKEND_PLAN.md, Stage 1).
+      tags: [sessions]
+      responses:
+        "201":
+          description: Сессия создана
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateSessionResponse" }
+        "429":
+          description: Rate limit по IP превышен
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /sessions/me:
+    get:
+      summary: Текущая сессия
+      description: Продлевает скользящее окно сессии (zan-backend-tz-v3.md §2.1).
+      tags: [sessions]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          description: >
+            Токен отсутствует/подделан/сессия истекла — во всех трёх случаях
+            один и тот же ответ, без автосоздания сессии (zan-backend-tz-v3.md §5.5).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    patch:
+      summary: Обновить language/theme текущей сессии
+      description: Поля опциональны — отсутствующее поле не изменяется.
+      tags: [sessions]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                language: { $ref: "#/components/schemas/Language" }
+                theme: { $ref: "#/components/schemas/Theme" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Невалидное значение language/theme
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /sessions/onboarding-seen:
+    post:
+      summary: Пометить онбординг просмотренным
+      tags: [sessions]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/ping:
+    get:
+      summary: Проверка X-Admin-Token
+      description: >
+        Служебная ручка исключительно чтобы проверить гейт AdminAuth
+        (Stage 1 DoD). Тот же гейт (см. security ниже) защищает все /admin/*
+        роуты, включая /admin/analytics/overview (Stage 7).
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+        "401":
+          description: Заголовок X-Admin-Token отсутствует или неверный
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "429":
+          description: >
+            admin_blocked — IP заблокирован после N неудачных попыток подряд
+            (zan-backend-tz-v3.md §5.7, Stage 7); действует для всех /admin/*,
+            не только этой ручки, проверяется до сравнения токена.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /services:
+    get:
+      summary: Активные услуги с ценами
+      description: zan-backend-tz-v2.md §3.4. Публичный, без сессии.
+      tags: [catalog]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Service" }
+
+  /tariffs:
+    get:
+      summary: Активные бандлы с рассчитанной ценой
+      description: >
+        zan-backend-tz-v2.md §2.3/§3.4. Цена считается на лету по текущим
+        ценам услуг (internal/service/pricing на бэке, побитово совпадает
+        с frontend/src/shared/lib/tariffPricing.ts). Публичный, без сессии.
+      tags: [catalog]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Tariff" }
+
+  /balance:
+    get:
+      summary: Остаток сессии по каждой активной услуге
+      description: zan-backend-tz-v2.md §3.4.
+      tags: [billing]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BalanceEntry" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /payments/checkout:
+    post:
+      summary: Оформить покупку (мок-оплата)
+      description: >
+        zan-backend-tz-v2.md §3.5/§4.1. kind=tariff — items берётся из
+        самого тарифа (переданный items игнорируется), kind=custom/
+        single_service — items обязателен. Сумма считается той же формулой,
+        что и GET /tariffs.
+      tags: [billing]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutRequest" }
+      responses:
+        "201":
+          description: Платёж создан (pending)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutResponse" }
+        "400":
+          description: Невалидные items/kind/tariff_id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: tariff_id не найден
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /payments/{id}:
+    get:
+      summary: Статус платежа
+      tags: [billing]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "404":
+          description: Платёж не найден или принадлежит другой сессии
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /payments/{id}/confirm:
+    post:
+      summary: Эмуляция успешной оплаты
+      description: >
+        zan-backend-tz-v2.md §3.5. Идемпотентно (zan-backend-tz-v3.md §5.1)
+        — повторный confirm для уже success-платежа не начисляет баланс
+        повторно и не считается ошибкой.
+      tags: [billing]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK (success — в том числе повторный вызов)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "404":
+          description: Платёж не найден или принадлежит другой сессии
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: Платёж уже failed — confirm невозможен
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/prompts:
+    get:
+      summary: Обе записи промптов агента (qa/document)
+      description: zan-backend-tz-v2.md §3.7, §4.6. Stage 5.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AgentPrompt" }
+
+  /admin/prompts/{agent_type}:
+    put:
+      summary: Обновить текст промпта агента
+      description: >
+        zan-backend-tz-v2.md §3.7/§4.6. Применяется без долгого кеша —
+        internal/agent.Client читает prompt_text заново на каждый вызов LLM.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: agent_type
+          in: path
+          required: true
+          schema: { $ref: "#/components/schemas/AgentType" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt_text]
+              properties:
+                prompt_text: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentPrompt" }
+        "400":
+          description: Пустой prompt_text
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: agent_type_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/services:
+    get:
+      summary: Все услуги, включая неактивные
+      description: zan-backend-tz-v2.md §3.7.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Service" }
+
+  /admin/services/{id}:
+    put:
+      summary: Обновить price/is_active услуги
+      description: >
+        zan-backend-tz-v2.md §3.7. Оба поля обязательны (полная замена
+        мутируемых полей, не частичный PATCH) — нет отдельного эндпоинта на
+        создание услуги, каталог заведён миграцией (только qa/doc на MVP).
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [price, is_active]
+              properties:
+                price: { type: integer, description: "Целые тенге" }
+                is_active: { type: boolean }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "400":
+          description: Невалидная цена
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: service_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/tariffs:
+    get:
+      summary: Все тарифы, включая неактивные
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Tariff" }
+    post:
+      summary: Создать тариф
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TariffWriteRequest" }
+      responses:
+        "201":
+          description: Создан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tariff" }
+        "400":
+          description: Невалидные items/discount_percent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/tariffs/{id}:
+    put:
+      summary: Обновить тариф (полная замена name/discount_percent/items)
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TariffWriteRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Tariff" }
+        "400":
+          description: Невалидные items/discount_percent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: tariff_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    delete:
+      summary: Архивировать тариф (is_active=false)
+      description: >
+        zan-backend-tz-v2.md §3.7 — архив, не физическое удаление, история
+        платежей не трогается.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Архивирован
+        "404":
+          description: tariff_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/analytics/overview:
+    get:
+      summary: Агрегаты по тредам/сообщениям
+      description: >
+        zan-backend-tz-v2.md §3.8, Stage 7. Только своя БД, считается на
+        лету на каждый запрос (без кеша). Soft-deleted треды исключены из
+        total_threads/status_breakdown и из avg_processing_time_sec/
+        satisfaction_rate (сообщения удалённых тредов не в счёт).
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AnalyticsOverview" }
+        "401":
+          description: См. GET /admin/ping
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "429":
+          description: См. GET /admin/ping
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads:
+    post:
+      summary: Создать тред
+      description: >
+        zan-backend-tz-v2.md §3.2/§4.2. Если баланс sessionID по service_id
+        достаточен — списывает 1 единицу и синхронно (Stage 3: StubAgent)
+        обрабатывает запрос, ответ уже в теле (status done/clarify/error).
+        Если баланса нет — тред создаётся неоплаченным (status=queued,
+        is_paid=false); клиент проводит POST /payments/checkout
+        {kind: single_service, thread_id} → confirm активирует тред.
+        Ограничено rate-limit по IP и по session_id (zan-backend-tz-v3.md
+        §5.7, Stage 7) — самая дорогая операция публичного API.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateThreadRequest" }
+      responses:
+        "201":
+          description: Тред создан (оплачен и обработан, либо в очереди на оплату)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadDetail" }
+        "400":
+          description: Ни text, ни file_ids не заданы, неизвестный input_type или невалидный service_id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: service_not_found или file_not_found (один из file_ids не существует/чужой/уже привязан)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "429":
+          description: rate_limited — превышен лимит по IP или по session_id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    get:
+      summary: Список тредов сессии
+      description: zan-backend-tz-v2.md §3.2. Только свои треды, без soft-deleted.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ThreadStatus" }
+        - name: search
+          in: query
+          description: Подстрока по title/preview_text, без учёта регистра.
+          schema: { type: string }
+        - name: page
+          in: query
+          description: 1-based, размер страницы фиксирован (thread.ListPageSize = 20).
+          schema: { type: integer, minimum: 1, default: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadListResponse" }
+        "400":
+          description: Невалидный status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}:
+    get:
+      summary: Тред + все сообщения
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadDetail" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found (в том числе чужая сессия/soft-deleted)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    delete:
+      summary: Удалить тред (soft delete)
+      description: zan-backend-tz-v2.md §3.2/§4.5. Безвозвратно с точки зрения клиента.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Удалён
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}/messages:
+    post:
+      summary: Добавить сообщение (уточнение) в тред
+      description: >
+        zan-backend-tz-v2.md §3.2/§4.3. Бесплатно, пока status IN
+        (done, clarify) и now() < free_until — баланс повторно не
+        списывается. Ответ ассистента уже в теле (StubAgent, синхронно).
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddMessageRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadDetail" }
+        "400":
+          description: Ни text, ни file_ids не заданы, или неизвестный input_type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found или file_not_found (один из file_ids не существует/чужой/уже привязан)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: >
+            thread_closed (free_until истёк — начните новый тред),
+            thread_not_active (status error/canceled), payment_required
+            (тред ещё не оплачен) или thread_busy (уже обрабатывается)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}/cancel:
+    post:
+      summary: Отменить тред
+      description: >
+        zan-backend-tz-v2.md §3.2 — только из статусов queued/processing
+        ("до оплаты или во время обработки"), см. domain.ThreadStatus.CanTransitionTo.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Thread" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: thread_cannot_cancel — статус не queued/processing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}/generate-document:
+    post:
+      summary: Сгенерировать документ по треду
+      description: >
+        zan-backend-tz-v2.md §3.2/§4.4, Stage 6. Отдельная платная операция
+        (service_id="doc"), доступна из любого треда, не только qa. Логика
+        оплаты — та же, что §4.2: недостаточно баланса → 409 payment_required,
+        клиент делает POST /payments/checkout {items:[{service_id:"doc",qty:1}],
+        thread_id} + confirm и повторяет этот запрос. Ответ ассистента с
+        текстом документа сохраняется в тред и возвращается синхронно;
+        files_ready=false означает, что текст готов (виден в GET /threads/{id}),
+        но рендер PDF/DOCX не удался (backend-roadmap.md §5.2, doc-кредит уже
+        возвращён) — GET .../document в этом случае отдаёт 404
+        document_not_generated, повторите генерацию.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "201":
+          description: Ответ сохранён в тред (см. files_ready)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GenerateDocumentResponse" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: payment_required — недостаточно баланса "doc"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "502":
+          description: >
+            document_generation_failed — LLM не смогла подготовить текст
+            (таймаут/невалидный ответ/отказ модели); doc-кредит уже
+            возвращён на баланс, ничего не сохранено в тред.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}/document:
+    get:
+      summary: Скачать сгенерированный документ
+      description: >
+        zan-backend-tz-v2.md §3.2, Stage 6. Последний сгенерированный файл
+        треда в запрошенном формате — POST .../generate-document рендерит
+        pdf и docx одним вызовом, здесь только выдаётся свежая ссылка.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [pdf, docx] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileAttachment" }
+        "400":
+          description: format вне pdf/docx
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found, либо document_not_generated — этот формат ещё не сгенерирован
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /messages/{id}/feedback:
+    post:
+      summary: Оценить сообщение ассистента
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MessageFeedbackRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400":
+          description: Невалидный value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found (сообщение не найдено или принадлежит чужой сессии)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /files/upload:
+    post:
+      summary: Загрузить файл
+      description: >
+        zan-backend-tz-v2.md §3.3, Stage 4. multipart/form-data, поле "file".
+        Лимит — 20 МБ, форматы — pdf/docx/png/jpg (BACKEND_PLAN.md §6 п.13).
+        Синхронно вызывает FilesService.Extract (BACKEND_PLAN.md §3) —
+        неудача извлечения не проваливает upload (zan-backend-tz-v3.md §5.3):
+        файл всё равно сохраняется с processing_status=error. file_id из
+        ответа передаётся в file_ids POST /threads|.../messages.
+      tags: [files]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Файл сохранён
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileAttachment" }
+        "400":
+          description: Отсутствует multipart-поле "file"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "413":
+          description: file_too_large — файл больше 20 МБ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "415":
+          description: unsupported_file_type — MIME вне pdf/docx/png/jpg
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: file_rejected — файл отклонён проверкой безопасности
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /files/{id}:
+    get:
+      summary: Метаданные файла и свежая ссылка на скачивание
+      description: >
+        zan-backend-tz-v2.md §3.3. url перевыпускается заново на каждый вызов
+        (presigned-ссылка с ограниченным сроком жизни, не хранится статично).
+      tags: [files]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileAttachment" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: file_not_found (не существует или принадлежит чужой сессии)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /voice/transcribe:
+    post:
+      summary: Распознать голосовую заметку
+      description: >
+        zan-backend-tz-v2.md §3.3/§4.7, Stage 4. multipart/form-data, поле
+        "audio". Синхронный вызов SttService.Transcribe — текст возвращается
+        клиенту ДО отправки сообщения в тред; ничего не сохраняется в БД
+        (аудио удаляется из хранилища сразу после распознавания). Клиент
+        сам передаёт полученный текст дальше в POST /threads|.../messages
+        с input_type=voice.
+      tags: [files]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio]
+              properties:
+                audio: { type: string, format: binary }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text]
+                properties:
+                  text: { type: string }
+        "400":
+          description: Отсутствует multipart-поле "audio"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "413":
+          description: file_too_large — аудио больше 15 МБ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "415":
+          description: unsupported_file_type — MIME вне webm/ogg/mp4/mpeg/wav
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "422":
+          description: empty_transcript — тишина, ничего не распознано (zan-backend-tz-v3.md §5.4)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "503":
+          description: voice_transcribe_failed — STT-провайдер отказал/недоступен
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /logs/client:
+    post:
+      summary: Принять событие с фронтенда
+      description: >
+        zan-backend-tz-v3.md §6.3, Stage 7. Без сессии намеренно (событие
+        может произойти до того, как сессия вообще появилась, например сам
+        POST /sessions упал) — единственная защита от спама здесь rate
+        limiting по IP, не авторизация. Ничего не пишет в БД: событие целиком
+        уходит в тот же структурированный лог, что и остальные записи
+        backend'а, для последующей склейки по trace_id/session_id.
+      tags: [logs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClientLogRequest" }
+      responses:
+        "204":
+          description: Принято
+        "400":
+          description: Невалидный level (не INFO/WARN/ERROR) или пустой event/message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "429":
+          description: rate_limited — превышен лимит по IP
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_token
+    SessionBearer:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'Формат: "Session <token>" (мобильный клиент).'
+    AdminToken:
+      type: apiKey
+      in: header
+      name: X-Admin-Token
+
+  schemas:
+    Language:
+      type: string
+      enum: [ru, kz]
+    Theme:
+      type: string
+      enum: [light, dark]
+    Session:
+      type: object
+      required: [session_id, language, onboarding_seen]
+      properties:
+        session_id: { type: string, format: uuid }
+        language: { $ref: "#/components/schemas/Language" }
+        theme:
+          allOf: [{ $ref: "#/components/schemas/Theme" }]
+          nullable: true
+        onboarding_seen: { type: boolean }
+    CreateSessionResponse:
+      type: object
+      required: [session_token, session_id]
+      properties:
+        session_token: { type: string }
+        session_id: { type: string, format: uuid }
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { $ref: "#/components/schemas/ApiErrorCode" }
+        message:
+          type: string
+          description: Понятное пользователю сообщение на его языке.
+
+    ApiErrorCode:
+      type: string
+      description: >
+        BACKEND_PLAN.md §6 п.6 (закрыто Stage 8) — полный каталог кодов,
+        которые реально отдаёт backend/ в теле ApiError (сверено с
+        internal/apierror + internal/httpserver, не список пожеланий).
+        Значения из первоначального списка плана, которых в итоге не
+        оказалось отдельным кодом ошибки — `llm_timeout`/`rag_unavailable`
+        (сбой LLM/RAG внутри одного HTTP-запроса возвращает общий
+        `internal_error`, кредит услуги при этом всё равно возвращается —
+        см. thread.Service.Process, BACKEND_LOG.md Stage 5/6) и
+        `needs_clarification` (это не ошибка — успешный ответ с
+        `Thread.status="clarify"`, см. схему ThreadStatus) — фронт не должен
+        на них рассчитывать.
+
+        HTTP-статус для каждого кода фиксирован (не пересчитывается на
+        лету), сверять по этому списку, не по одному только code:
+          - 400: invalid_request
+          - 401: session_invalid, admin_unauthorized
+          - 404: agent_type_not_found, document_not_generated,
+            file_not_found, payment_not_found, service_not_found,
+            tariff_not_found, thread_not_found
+          - 409: payment_not_pending, payment_required, thread_busy,
+            thread_cannot_cancel, thread_closed, thread_not_active
+          - 413: file_too_large
+          - 415: unsupported_file_type
+          - 422: empty_transcript, file_rejected
+          - 429: admin_blocked (IP заблокирован после N неудач, Stage 7),
+            rate_limited
+          - 500: internal_error
+          - 502: document_generation_failed (helper/ недоступен/вернул отказ)
+          - 503: voice_transcribe_failed
+      enum:
+        - admin_blocked
+        - admin_unauthorized
+        - agent_type_not_found
+        - document_generation_failed
+        - document_not_generated
+        - empty_transcript
+        - file_not_found
+        - file_rejected
+        - file_too_large
+        - internal_error
+        - invalid_request
+        - payment_not_found
+        - payment_not_pending
+        - payment_required
+        - rate_limited
+        - service_not_found
+        - session_invalid
+        - tariff_not_found
+        - thread_busy
+        - thread_cannot_cancel
+        - thread_closed
+        - thread_not_active
+        - thread_not_found
+        - unsupported_file_type
+        - voice_transcribe_failed
+
+    ServiceId:
+      type: string
+      description: >
+        BACKEND_PLAN.md §6 п.5 (закрыто Stage 8) — ровно эти два значения на
+        MVP, 1:1 с frontend/src/shared/types/tariff.ts#ServiceId. Не путать с
+        AgentType ("qa"/"document" — какой промпт/агент обрабатывает тред):
+        AgentTypeQA обслуживает ServiceId "qa", document-агент — ServiceId
+        "doc" (internal/agent.toAgentType, backend/internal/agent/agent.go).
+      enum: [qa, doc]
+
+    Service:
+      type: object
+      description: zan-backend-tz-v2.md §2.2. price — целые тенге (BACKEND_PLAN.md §6 п.7).
+      required: [id, type_label, name, price, is_active]
+      properties:
+        id: { $ref: "#/components/schemas/ServiceId" }
+        type_label: { type: string, example: "Консультация" }
+        name: { type: string, example: "Вопрос-ответ" }
+        price: { type: integer, description: "Целые тенге, не тиыны." }
+        is_active: { type: boolean }
+
+    BundleItem:
+      type: object
+      required: [service_id, qty]
+      properties:
+        service_id: { $ref: "#/components/schemas/ServiceId" }
+        qty: { type: integer, minimum: 1, maximum: 20 }
+
+    Tariff:
+      type: object
+      description: zan-backend-tz-v2.md §2.3. subtotal/total считаются на лету, не хранятся статично.
+      required: [id, name, discount_percent, items, subtotal, total, is_active]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        discount_percent: { type: integer, minimum: 0, maximum: 90 }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BundleItem" }
+        subtotal: { type: integer, description: "Целые тенге, до скидки." }
+        total: { type: integer, description: "Целые тенге, после скидки и округления до 10." }
+        is_active: { type: boolean }
+
+    TariffWriteRequest:
+      type: object
+      description: POST/PUT /admin/tariffs(/{id}) — полная замена мутируемых полей.
+      required: [name, items]
+      properties:
+        name: { type: string }
+        discount_percent: { type: integer, minimum: 0, maximum: 90, default: 0 }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BundleItem" }
+
+    BalanceEntry:
+      type: object
+      required: [service_id, quantity]
+      properties:
+        service_id: { $ref: "#/components/schemas/ServiceId" }
+        quantity: { type: integer }
+
+    PaymentKind:
+      type: string
+      enum: [single_service, tariff, custom]
+
+    PaymentStatus:
+      type: string
+      enum: [pending, success, failed]
+
+    CheckoutRequest:
+      type: object
+      description: >
+        zan-backend-tz-v2.md §3.5. items обязателен для kind=single_service
+        (ровно одна позиция) и kind=custom; для kind=tariff — tariff_id
+        обязателен, items игнорируется (состав берётся из тарифа).
+        thread_id — заполняется, когда checkout вызван за конкретный тред
+        (баланс кончился в момент открытия — v2 §4.2 п.2, Stage 3).
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/PaymentKind" }
+        tariff_id: { type: string, format: uuid, nullable: true }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/BundleItem" }
+        thread_id: { type: string, format: uuid, nullable: true }
+
+    CheckoutResponse:
+      type: object
+      required: [payment_id, amount]
+      properties:
+        payment_id: { type: string, format: uuid }
+        amount: { type: integer, description: "Целые тенге." }
+
+    Payment:
+      type: object
+      required: [id, kind, amount, status, provider]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/PaymentKind" }
+        amount: { type: integer }
+        status: { $ref: "#/components/schemas/PaymentStatus" }
+        provider: { type: string, example: mock }
+        paid_at: { type: string, format: date-time, nullable: true }
+
+    ThreadStatus:
+      type: string
+      description: >
+        zan-backend-tz-v2.md §2.6, буквально совпадает с
+        frontend/src/shared/types/common.ts#ThreadStatus
+        (BACKEND_PLAN.md §6 п.4). Статус-машина — domain.ThreadStatus.CanTransitionTo.
+      enum: [queued, processing, clarify, done, error, canceled]
+
+    MessageSender:
+      type: string
+      enum: [user, assistant]
+
+    MessageInputType:
+      type: string
+      description: >
+        voice — text уже расшифрован клиентом через POST /voice/transcribe
+        до вызова POST /threads|.../messages (zan-backend-tz-v2.md §4.7).
+        file — требует непустого file_ids (иначе 400 invalid_request);
+        text в этом случае может быть пустым — содержание сообщения несёт
+        вложение.
+      enum: [text, voice, file]
+
+    MessageFeedbackValue:
+      type: string
+      enum: [like, dislike]
+
+    AgentType:
+      type: string
+      description: zan-backend-tz-v2.md §2.9. qa — Stage 5, document — Stage 6.
+      enum: [qa, document]
+
+    AgentPrompt:
+      type: object
+      required: [agent_type, prompt_text, updated_at]
+      properties:
+        agent_type: { $ref: "#/components/schemas/AgentType" }
+        prompt_text:
+          type: string
+          description: >
+            Только "человеческая" часть промпта (тон/охват/поведение) —
+            технический контракт структурированного JSON-ответа агента сюда
+            не входит, его добавляет internal/agent.buildSystemPrompt поверх
+            этого текста.
+        updated_at: { type: string, format: date-time }
+
+    Source:
+      type: object
+      description: Статья закона, привязанная к ответу (zan-backend-tz-v2.md §2.7/§4.6).
+      required: [ref, quote]
+      properties:
+        ref: { type: string }
+        quote: { type: string }
+
+    Finding:
+      type: object
+      description: Структурированный пункт анализа (для ответов по документам).
+      required: [title, body]
+      properties:
+        title: { type: string }
+        body: { type: string }
+
+    Message:
+      type: object
+      required: [id, sender, input_type, text, unverified_sources, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        sender: { $ref: "#/components/schemas/MessageSender" }
+        input_type: { $ref: "#/components/schemas/MessageInputType" }
+        text: { type: string }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/Source" }
+        findings:
+          type: array
+          items: { $ref: "#/components/schemas/Finding" }
+        unverified_sources:
+          type: boolean
+          description: >
+            Stage 5. true — LLM процитировала источник вне того, что
+            реально вернул RAG-поиск (подозрение на галлюцинацию закона,
+            backend-roadmap.md §1.4/§5.2). Всегда false для sources=[]/
+            пользовательских сообщений. Решение "показывать ли" в UI — за
+            фронтом (backend-roadmap.md §8 п.5).
+        feedback:
+          allOf: [{ $ref: "#/components/schemas/MessageFeedbackValue" }]
+          nullable: true
+        processing_time_ms: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    GenerateDocumentResponse:
+      description: Ответ POST /threads/{id}/generate-document (Stage 6).
+      allOf:
+        - $ref: "#/components/schemas/Message"
+        - type: object
+          required: [files_ready]
+          properties:
+            files_ready:
+              type: boolean
+              description: >
+                false — текст готов и сохранён в тред, но
+                DocumentsService.Render не смог подготовить хотя бы один из
+                форматов (backend-roadmap.md §5.2) — doc-кредит уже
+                возвращён, GET /threads/{id}/document отдаст 404 до
+                следующей попытки генерации.
+
+    Thread:
+      type: object
+      description: zan-backend-tz-v2.md §2.6. Без сообщений — список GET /threads.
+      required: [id, service_id, status, title, preview_text, message_count, is_paid, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        service_id: { $ref: "#/components/schemas/ServiceId" }
+        status: { $ref: "#/components/schemas/ThreadStatus" }
+        title: { type: string, description: "Из первого сообщения, обрезано до ~60 символов (§4.5)." }
+        preview_text: { type: string, description: "Денормализованное короткое превью (§4.5)." }
+        message_count: { type: integer }
+        is_paid: { type: boolean }
+        paid_at: { type: string, format: date-time, nullable: true }
+        free_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Окно бесплатных уточнений (§4.3, конфигурируемо, дефолт 72ч).
+        created_at: { type: string, format: date-time }
+        last_message_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+
+    ThreadDetail:
+      description: Thread + все сообщения — GET /threads/{id}, ответ POST /threads и .../messages.
+      allOf:
+        - $ref: "#/components/schemas/Thread"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items: { $ref: "#/components/schemas/Message" }
+
+    ThreadListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Thread" }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    CreateThreadRequest:
+      type: object
+      description: >
+        zan-backend-tz-v2.md §3.2. text не required с точки зрения формы
+        (пустая строка допустима), но сервис требует text ИЛИ хотя бы один
+        file_id — иначе 400 invalid_request.
+      required: [service_id, input_type]
+      properties:
+        service_id: { $ref: "#/components/schemas/ServiceId" }
+        text: { type: string }
+        input_type: { $ref: "#/components/schemas/MessageInputType" }
+        file_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: id из ответа POST /files/upload — файл должен ещё не быть привязан к другому сообщению.
+
+    AddMessageRequest:
+      type: object
+      required: [input_type]
+      properties:
+        text: { type: string }
+        input_type: { $ref: "#/components/schemas/MessageInputType" }
+        file_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: см. CreateThreadRequest.file_ids.
+
+    MessageFeedbackRequest:
+      type: object
+      required: [value]
+      properties:
+        value: { $ref: "#/components/schemas/MessageFeedbackValue" }
+
+    FileProcessingStatus:
+      type: string
+      description: >
+        pending — сразу после upload, до ответа FilesService.Extract (в
+        текущей реализации не наблюдаемо снаружи — Extract вызывается
+        синхронно в теле того же запроса). error — извлечение не удалось
+        (повреждён/нечитаемый скан), файл всё равно доступен для скачивания.
+      enum: [pending, processed, error]
+
+    FileAttachment:
+      type: object
+      description: zan-backend-tz-v2.md §2.8/§3.3. Ответ POST /files/upload и GET /files/{id}.
+      required: [file_id, url, original_name, mime_type, size_bytes, processing_status]
+      properties:
+        file_id: { type: string, format: uuid }
+        url:
+          type: string
+          format: uri
+          description: Presigned-ссылка, короткого срока жизни — перевыпускается на каждый ответ, не хранить статично.
+        original_name: { type: string }
+        mime_type: { type: string, example: application/pdf }
+        size_bytes: { type: integer }
+        processing_status: { $ref: "#/components/schemas/FileProcessingStatus" }
+
+    AnalyticsOverview:
+      type: object
+      description: GET /admin/analytics/overview (zan-backend-tz-v2.md §3.8, Stage 7).
+      required: [total_threads, status_breakdown]
+      properties:
+        total_threads: { type: integer, description: "Не считая soft-deleted." }
+        status_breakdown:
+          type: object
+          description: Все 6 значений ThreadStatus как ключи, count=0 для тех, что не встретились.
+          additionalProperties: { type: integer }
+          example: { queued: 1, processing: 0, clarify: 2, done: 30, error: 5, canceled: 4 }
+        avg_processing_time_sec:
+          type: number
+          nullable: true
+          description: >
+            Среднее по всем отвеченным сообщениям ассистента (Q&A и
+            генерация документа вместе). Отсутствует в ответе (не 0), пока
+            ни одно сообщение ассистента ещё не сохранено.
+        satisfaction_rate:
+          type: number
+          nullable: true
+          description: >
+            Доля "like" среди оценённых сообщений ассистента
+            (zan-backend-tz-v2.md §3.8). Отсутствует в ответе (не 0), пока
+            ни одна оценка ещё не выставлена.
+
+    ClientLogRequest:
+      type: object
+      description: POST /logs/client (zan-backend-tz-v3.md §6.3).
+      required: [level, event, message]
+      properties:
+        session_id:
+          type: string
+          description: Опционально — событие может произойти до того, как сессия появилась.
+        trace_id:
+          type: string
+          description: trace_id запроса/действия, к которому относится событие (не trace_id этого самого вызова /logs/client).
+        level: { type: string, enum: [INFO, WARN, ERROR] }
+        event: { type: string, example: mic_permission_denied }
+        message: { type: string }
+        context:
+          type: object
+          additionalProperties: true
+          example: { url: "/chat", user_agent: "...", screen: "chat" }

@@ -1,0 +1,16 @@
+# Го-таргет кодогенерации (BACKEND_PLAN.md §3.2).
+# Python-таргет намеренно НЕ здесь: сгенерирован отдельным вызовом
+# `python -m grpc_tools.protoc` (см. корневой Makefile#proto и BACKEND_LOG.md,
+# запись Stage 0) — grpcio-tools несёт собственный проток-компилятор
+# и не нуждается в системном protoc/buf remote-плагинах, что делает
+# генерацию для Python работоспособной полностью офлайн.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: ../backend/internal/genproto
+    opt:
+      - paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: ../backend/internal/genproto
+    opt:
+      - paths=source_relative

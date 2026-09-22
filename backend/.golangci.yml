@@ -1,0 +1,14 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - errcheck # ни одного проигнорированного error (BACKEND_CODING_STANDARDS.md §6.1)
+    - staticcheck # включает stylecheck-правила: ловит UPPER_SNAKE_CASE-константы (§5.1), stutter в именах
+    - unused
+    - ineffassign
+    - gosec # базовая проверка на security-паттерны (BACKEND_PLAN.md §8, Stage 8 — не заменяет полноценный security-обзор)
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

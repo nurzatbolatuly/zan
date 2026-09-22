@@ -1,0 +1,131 @@
+[project]
+name = "zan-helper"
+version = "0.1.0"
+description = "Zan — Python-сервис специализированных ML-задач (RAG/файлы/голос/рендер документов), вызывается только из backend/ по gRPC. См. BACKEND_PLAN.md."
+requires-python = ">=3.12"
+dependencies = [
+    "grpcio>=1.84,<2",
+    "grpcio-reflection>=1.84,<2",
+    "starlette>=0.48,<1",
+    "uvicorn[standard]>=0.38,<1",
+    "structlog>=25.4,<26",
+    "pydantic-settings>=2.11,<3",
+    # --- Stage 4 (BACKEND_PLAN.md §1.2) ---
+    "boto3>=1.43,<2", # S3-совместимый клиент (MinIO), тот же бакет, что и backend/
+    "httpx>=0.28,<1", # скачивание file_url (перенесён из dev-only — Stage 4 первый реальный юзкейс в проде, не только в тестах)
+    "pymupdf>=1.28,<2", # PDF -> текст (FilesService.Extract)
+    "python-docx>=1.2,<2", # DOCX -> текст (FilesService.Extract)
+    "pytesseract>=0.3,<1", # OCR-фолбэк для сканов (обёртка над системным tesseract, см. helper/Dockerfile)
+    "pdf2image>=1.17,<2", # рендер страниц PDF в изображения перед OCR (обёртка над системным poppler)
+    "pillow>=12,<13", # изображения для OCR — импортируется напрямую (app/adapters/extraction.py), не только транзитивно через pdf2image
+    "faster-whisper>=1.2,<2", # self-hosted STT (SttService.Transcribe, BACKEND_PLAN.md §6 п.10)
+    "docxtpl>=0.20,<1", # рендер DOCX из Jinja2-шаблона (DocumentsService.Render)
+    "weasyprint>=70,<71", # рендер PDF из HTML/CSS (DocumentsService.Render, требует системных cairo/pango — см. Dockerfile)
+    # --- Stage 5 (BACKEND_PLAN.md §1.2, §1.3) ---
+    "asyncpg>=0.31,<1", # доступ к схеме rag (владеет и мигрирует только Python) — raw SQL, без ORM, тот же принцип, что pgx напрямую в Go
+    "alembic>=1.20,<2", # миграции схемы rag, отдельный CLI от рантайма (то же решение, что golang-migrate у backend/)
+    "fastembed>=0.8,<1", # self-hosted embeddings (ONNX, без torch) — RagService.Search, BACKEND_PLAN.md §6 п.10 (тот же Strategy-приём, что self-hosted STT)
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.84,<2",
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.2,<2",
+    "ruff>=0.14,<1",
+    "mypy>=1.19,<2",
+    "types-grpcio>=1.83,<2",
+    "types-grpcio-reflection>=1.0,<2",
+    "boto3-stubs[s3]>=1.43,<2",
+    "asyncpg-stubs>=0.31,<1", # Stage 5 — asyncpg сам не несёт py.typed
+    # moto не поддерживает кастомный endpoint_url (нужен для MinIO) —
+    # реальный MinIO в testcontainers, тот же образ и подход, что и
+    # backend/internal/platform/storage/s3_test.go (BACKEND_CODING_STANDARDS.md §10).
+    "testcontainers>=4.9,<5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# app/genproto — сгенерированный buf/grpc_tools код (BACKEND_CODING_STANDARDS.md
+# §3), руками не редактируется и не подгоняется под наш стиль.
+# extend-exclude (не exclude!) — иначе список ПОЛНОСТЬЮ заменяет дефолтный
+# exclude ruff (который и так исключает .venv/.git/... — без extend- ruff
+# начинает линтить содержимое .venv).
+extend-exclude = ["app/genproto"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.isort]
+# "zan" — сгенерированный код (app/genproto/zan/...), физически вне app/, но
+# импортируется как zan.rpc.v1.* через sys.path-трюк (app/bootstrap_genproto.py)
+# — без этого ruff сортирует "from zan..." в третьесторонний блок ПЕРЕД
+# "from app import bootstrap_genproto", ломая рантайм-инвариант "bootstrap
+# раньше любого from zan.* import" (обнаружено при сборке Docker-образа,
+# Stage 4 — ModuleNotFoundError: No module named 'zan'). known-first-party
+# держит оба пакета в одном алфавитно упорядоченном блоке: "app" < "zan".
+known-first-party = ["zan"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+exclude = ["app/genproto"]
+# mypy_path — тот же трюк, что app/bootstrap_genproto.py делает для sys.path
+# в рантайме: сгенерированный код импортируется как "zan.rpc.v1.xxx_pb2"
+# (см. .proto), физически лежит под app/genproto/zan/rpc/v1/ — без этого
+# mypy не находит модуль "zan.rpc.v1" при статической проверке сервисеров.
+mypy_path = ["app/genproto"]
+# pydantic.mypy — без него mypy видит required-поля Settings (Stage 4:
+# internal_secret/s3_access_key/s3_secret_key, без значения по умолчанию) как
+# обязательные позиционные/именованные аргументы конструктора и требует их на
+# каждый Settings()/Settings(...) вызов — хотя pydantic-settings реально
+# заполняет их из ENV в рантайме. Плагин учит mypy об этом контракте.
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Сгенерированный код не типизирован под mypy --strict — исключён из
+# проверки (см. BACKEND_CODING_STANDARDS.md §6.2), но обязан оставаться
+# импортируемым.
+module = "app.genproto.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Ни один из этих пакетов не несёт py.typed/stub-пакета в PyPI (проверено при
+# реализации Stage 4) — import-untyped точечно на них, не глобально.
+module = ["docxtpl", "weasyprint", "pytesseract", "faster_whisper"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# pymupdf несёт py.typed, но часть публичного API (Document/open-алиас,
+# Document.tobytes/close) сама недотипизирована внутри пакета (проверено при
+# реализации Stage 4) — эта тестовая фикстура строит PDF через тот же API,
+# что и app/adapters/extraction.py (там — точечный inline type: ignore на
+# единственный вызов; здесь вызовов больше, поэтому disable для всего файла,
+# один код ошибки, не ignore_errors целиком).
+module = "tests.test_extraction_adapters"
+disable_error_code = ["no-untyped-call"]
+
+[[tool.mypy.overrides]]
+# Тот же класс проблемы, что выше, плюс сгенерированные *_grpc.py Stub-классы
+# и add_*Servicer_to_server (types-grpcio типизирует их под синхронный
+# grpc.Channel/grpc.Server, не grpc.aio — известное ограничение пакета,
+# см. tests/test_grpc_server.py).
+module = ["tests.test_grpc_servicers", "tests.test_rag_servicer"]
+disable_error_code = ["no-untyped-call"]
+
+[[tool.mypy.overrides]]
+# Тот же class проблемы — composition root регистрирует все три *Servicer.
+module = "app.main"
+disable_error_code = ["no-untyped-call"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

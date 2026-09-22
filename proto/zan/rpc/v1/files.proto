@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package zan.rpc.v1;
+
+option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
+
+// FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
+// Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
+// сразу после того, как файл сохранён в S3-совместимом хранилище.
+service FilesService {
+  rpc Extract(ExtractRequest) returns (ExtractResponse);
+}
+
+// ExtractRequest — file_url, не байты (BACKEND_PLAN.md §3.1: payload
+// остаётся маленьким, лимит unary-сообщения gRPC не бьёт даже на файле в
+// 20 МБ). file_url — presigned GET-ссылка на собственный MinIO/S3
+// backend'а, короткого времени жизни (internal/grpcclient генерирует её
+// непосредственно перед вызовом) — Python обязан проверить, что host
+// ссылки совпадает с его собственным сконфигурированным storage-эндпоинтом,
+// прежде чем идти по ней (SSRF-риск, BACKEND_PLAN.md §8).
+message ExtractRequest {
+  string file_url = 1;
+  string mime_type = 2;
+}
+
+message ExtractResponse {
+  string text = 1;
+}

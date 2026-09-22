@@ -1,0 +1,6 @@
+# internal/genproto — НЕ игнорируется: сгенерированный код коммитится
+# (BACKEND_PLAN.md §3.2, BACKEND_CODING_STANDARDS.md §3).
+
+/bin/
+*.log
+.env
