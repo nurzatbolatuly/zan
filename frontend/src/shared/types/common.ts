@@ -4,6 +4,7 @@ export type Theme = "light" | "dark";
 /** Заглушка до реальной авторизации — см. shared/hooks/useRole.ts */
 export type Role = "user" | "admin";
 
-/** Статусная модель треда (backend-roadmap.md, brief §3.3) */
+/** Статусная модель треда (openapi.yaml#ThreadStatus). `awaiting_payment` —
+ * вопрос сохранён, но не оплачен: ждёт пополнения баланса в «Тарифах». */
 export type ThreadStatus =
-  "queued" | "processing" | "clarify" | "done" | "error" | "canceled";
+  "awaiting_payment" | "processing" | "done" | "error" | "canceled";

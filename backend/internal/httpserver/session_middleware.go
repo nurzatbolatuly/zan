@@ -21,11 +21,14 @@ const (
 )
 
 // SessionAuth аутентифицирует запрос по opaque-токену сессии из
-// Authorization: Session <token> (мобильный клиент) или cookie
-// session_token (веб) — zan-backend-tz-v3.md §2.1. Токен не найден,
-// подделан или сессия истекла — 401 без автосоздания (v3 §5.5, "как при
-// первом заходе — чистое состояние"). Продлевает скользящее окно на
-// каждый успешный запрос (session.Service.Authenticate).
+// Authorization: Session <token> (основной механизм фронта — instructions.md
+// §6 "Транспорт сессии", bearer в localStorage) или cookie session_token
+// (резервный путь) — zan-backend-tz-v3.md §2.1; для WS-хендшейка (GET
+// /ws/threads/{id}, Stage 9) — ещё и query-параметр ?token=, см.
+// extractSessionToken. Токен не найден, подделан или сессия истекла — 401
+// без автосоздания (v3 §5.5, "как при первом заходе — чистое состояние").
+// Продлевает скользящее окно на каждый успешный запрос
+// (session.Service.Authenticate).
 func SessionAuth(svc *session.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractSessionToken(c)
@@ -61,6 +64,15 @@ func sessionRequiredError() *apierror.Error {
 	}
 }
 
+// extractSessionToken — заголовок/cookie (см. SessionAuth), плюс query-
+// параметр ?token= как последний фолбэк (Stage 9): ТОЛЬКО ради WS-хендшейка
+// (GET /ws/threads/{id}) — нативный браузерный WebSocket не умеет
+// выставлять произвольные заголовки при апгрейде, а фронт держит токен
+// сессии не в cookie, а в localStorage (instructions.md §6), поэтому
+// cookie-путь для этого случая не подходит. На обычных REST-маршрутах этот
+// фолбэк безвреден (невалидный/пустой токен в query всё равно даёт
+// обычный 401) и не становится основным механизмом — bearer-заголовок им
+// остаётся.
 func extractSessionToken(c *gin.Context) string {
 	if h := c.GetHeader("Authorization"); strings.HasPrefix(h, sessionAuthzPrefix) {
 		return strings.TrimPrefix(h, sessionAuthzPrefix)
@@ -68,7 +80,7 @@ func extractSessionToken(c *gin.Context) string {
 	if cookie, err := c.Cookie(sessionCookieName); err == nil {
 		return cookie
 	}
-	return ""
+	return c.Query("token")
 }
 
 // sessionFromGin достаёт сессию, положенную SessionAuth. Паникует, если

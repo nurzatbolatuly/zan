@@ -1,5 +1,12 @@
 import type { Lang, ThreadStatus } from "@/shared/types/common";
+import { pluralRu } from "@/shared/lib/format";
 import type { HistoryPeriodFilter } from "./types";
+
+const MESSAGE_FORMS_RU: readonly [string, string, string] = [
+  "сообщение",
+  "сообщения",
+  "сообщений",
+];
 
 interface HistoryDictionary {
   title: string;
@@ -12,6 +19,10 @@ interface HistoryDictionary {
   periodFilterLabel: string;
   periodLabel: Record<HistoryPeriodFilter, string>;
   open: string;
+  /** Вторая meta-строка карточки — снова счётчик сообщений (не время обработки,
+   * см. instructions.md, расхождение №4 плана интеграции — `Thread`, список,
+   * не отдаёт агрегированное время обработки, только `message_count`). */
+  messagesCountLabel: (count: number) => string;
   deleteAction: string;
   deleteConfirmTitle: string;
   deleteConfirmMessage: string;
@@ -23,6 +34,9 @@ interface HistoryDictionary {
   resetFilters: string;
   askQuestion: string;
   cancel: string;
+  loadError: string;
+  retry: string;
+  loadMore: string;
 }
 
 // Строки — 1:1 из прототипа (Zan.dc.html:583-608, 629-630, 657-682, 704),
@@ -38,9 +52,8 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
     filterLabel: "Статус",
     filterAll: "Все",
     statusLabel: {
-      queued: "В очереди",
+      awaiting_payment: "Ожидает оплаты",
       processing: "Обрабатывается",
-      clarify: "Ждёт уточнения",
       done: "Готово",
       error: "Ошибка",
       canceled: "Отменён",
@@ -54,6 +67,7 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
       "30d": "30 дней",
     },
     open: "Открыть тред",
+    messagesCountLabel: (count) => `${count} ${pluralRu(count, MESSAGE_FORMS_RU)}`,
     deleteAction: "Удалить",
     deleteConfirmTitle: "Подтвердите удаление",
     deleteConfirmMessage:
@@ -66,6 +80,9 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
     resetFilters: "Сбросить фильтры",
     askQuestion: "Задать вопрос",
     cancel: "Отмена",
+    loadError: "Не удалось загрузить обращения.",
+    retry: "Повторить",
+    loadMore: "Показать ещё",
   },
   kz: {
     title: "Тарих",
@@ -75,9 +92,8 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
     filterLabel: "Мәртебе",
     filterAll: "Барлығы",
     statusLabel: {
-      queued: "Кезекте",
+      awaiting_payment: "Төлемді күтуде",
       processing: "Өңделуде",
-      clarify: "Нақтылауды күтуде",
       done: "Дайын",
       error: "Қате",
       canceled: "Тоқтатылған",
@@ -91,6 +107,7 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
       "30d": "30 күн",
     },
     open: "Тредті ашу",
+    messagesCountLabel: (count) => `${count} хабар`,
     deleteAction: "Жою",
     deleteConfirmTitle: "Жоюды растаңыз",
     deleteConfirmMessage: "Өтініш пен оның хат-хабары қайтарылмастай жойылады.",
@@ -103,5 +120,8 @@ export const historyDictionary: Record<Lang, HistoryDictionary> = {
     resetFilters: "Сүзгілерді алып тастау",
     askQuestion: "Сұрақ қою",
     cancel: "Болдырмау",
+    loadError: "Өтініштерді жүктеу мүмкін болмады.",
+    retry: "Қайталау",
+    loadMore: "Тағы көрсету",
   },
 };

@@ -1,52 +1,87 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLangStore } from "@/shared/stores/useLangStore";
 import { useConfirmModalStore } from "@/shared/stores/useConfirmModalStore";
 import { useToast } from "@/shared/ui";
 import { logger } from "@/shared/lib/logger";
-import { calcBundlePrice, findBundleUsingService } from "./bundlePricing";
+import { api } from "@/shared/lib/api";
+import { describeApiError } from "@/shared/lib/apiErrorMessages";
+import { calcBundlePrice } from "./bundlePricing";
 import { settingsDictionary } from "./locales";
-import { SERVICE_MOCKS, BUNDLE_MOCKS } from "./mocks";
-import type { Bundle, BundleFormResult, Service, ServiceFormResult, ServiceId } from "./types";
+import type { Bundle, BundleFormResult, Service, ServiceId } from "./types";
+import type { ServiceDto, TariffDto, TariffWriteRequestDto } from "@/shared/types/api";
 
 type BundleModalState =
   { mode: "closed" } | { mode: "create" } | { mode: "edit"; bundle: Bundle };
 
+function mapService(dto: ServiceDto): Service {
+  return {
+    id: dto.id,
+    typeLabel: dto.type_label,
+    name: dto.name,
+    unitPriceTenge: dto.price,
+    isActive: dto.is_active,
+  };
+}
+
+function mapBundle(dto: TariffDto): Bundle {
+  return {
+    id: dto.id,
+    name: dto.name,
+    discountPercent: dto.discount_percent,
+    items: dto.items.map((item) => ({ serviceId: item.service_id, qty: item.qty })),
+  };
+}
+
 /**
- * Данные — мок в локальном стейте до Stage 6 (`/tariffs` admin CRUD,
- * instructions.md «Открытые вопросы» — форма ответа для админки ещё не
- * согласована с бэком). Услуги/тарифы инициализируются один раз из мока
- * текущего языка (`useState`, без ленивого пересчёта по `lang`) — это
- * админские данные, которые пользователь может успеть отредактировать;
- * в отличие от контента чата (instructions.md «Конвенции»), сброс на смену
- * языка молча стёр бы несохранённые правки админа, а не просто перевёл текст.
+ * Данные — реальный `/admin/services`/`/admin/tariffs` CRUD (Stage 6, требует
+ * `X-Admin-Token` — см. `AdminGate.tsx`). Каталог услуг фиксирован миграцией
+ * (только qa/doc, `PUT /admin/services/{id}` — только `price`/`is_active`,
+ * бэк не даёт ни создавать, ни удалять услугу) — в отличие от Stage 4b на
+ * моках, здесь нет `addService`/`requestDeleteService`, вместо удаления —
+ * переключатель активности (`setServiceActive`).
  */
 export function useAdminTariffs() {
   const lang = useLangStore((state) => state.lang);
   const t = settingsDictionary[lang];
   const toast = useToast();
   const openConfirm = useConfirmModalStore((state) => state.open);
+  const queryClient = useQueryClient();
 
-  const [services, setServices] = useState<Service[]>(() => SERVICE_MOCKS[lang]);
-  const [bundles, setBundles] = useState<Bundle[]>(() => BUNDLE_MOCKS[lang]);
-  const [isServiceModalOpen, setServiceModalOpen] = useState(false);
+  const servicesQuery = useQuery({
+    queryKey: ["admin", "services"],
+    queryFn: () => api.get<ServiceDto[]>("/admin/services", { admin: true }),
+  });
+  const tariffsQuery = useQuery({
+    queryKey: ["admin", "tariffs"],
+    queryFn: () => api.get<TariffDto[]>("/admin/tariffs", { admin: true }),
+  });
+
+  // Локальная копия — инлайн-редактирование цены идёт по каждому нажатию
+  // клавиши (UI-состояние поля до коммита на blur, FRONT_CODING_STANDARDS.md
+  // §2), сервер — источник истины только на момент первой успешной загрузки
+  // (повторный resync после ошибки — см. commitServiceChange).
+  const [services, setServices] = useState<Service[] | null>(null);
+  useEffect(() => {
+    if (servicesQuery.data && services === null) {
+      setServices(servicesQuery.data.map(mapService));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servicesQuery.data]);
+
+  const bundles = useMemo(
+    () => (tariffsQuery.data ?? []).map(mapBundle),
+    [tariffsQuery.data],
+  );
+
+  const [isBundleModalPending, setBundleModalPending] = useState(false);
   const [bundleModal, setBundleModal] = useState<BundleModalState>({ mode: "closed" });
   // Растёт при каждом открытии модалки — используется как React `key` на
   // BundleEditModal, чтобы форма пересобиралась с чистыми defaultValues каждый
   // раз (без этого повторное открытие того же тарифа после "Отмена" показало
-  // бы недосохранённый черновик прошлой попытки — ключ по одному только id
-  // тарифа не менялся бы между двумя открытиями одного и того же тарифа).
+  // бы недосохранённый черновик прошлой попытки).
   const modalNonceRef = useRef(0);
-  // Тот же приём для ServiceCreateModal — растёт на каждое открытие, идёт в
-  // React `key`, чтобы повторное "Добавить услугу" после "Отмена" не
-  // показывало недосохранённый черновик прошлой попытки.
-  const serviceModalNonceRef = useRef(0);
 
-  // Тот же паттерн, что и useTariffs.ts (Stage 3) — витрина считается в хуке
-  // через useMemo, компоненты (BundleCard) только рендерят готовые значения
-  // (FRONT_CODING_STANDARDS.md §1: "рендер-JSX не должен вперемешку содержать расчёты цены").
-  // `includesItems` — массив строк (одна на позицию), не склеенная запятыми
-  // строка: карточка тарифа теперь переиспользует вёрстку Stage 3
-  // (features/tariffs/components/BundleCard.tsx), где состав — нумерованный список.
   const bundlesView = useMemo(
     () =>
       bundles.map((bundle) => ({
@@ -55,12 +90,12 @@ export function useAdminTariffs() {
           .filter((item) => item.qty > 0)
           .map((item) => {
             const serviceName =
-              services.find((service) => service.id === item.serviceId)?.name ??
+              (services ?? []).find((service) => service.id === item.serviceId)?.name ??
               item.serviceId;
             return t.tariffs.qtyLabel(item.serviceId, item.qty, serviceName);
           }),
         discountLabel: t.tariffs.discountLabel(bundle.discountPercent),
-        price: calcBundlePrice(bundle.items, services, bundle.discountPercent),
+        price: calcBundlePrice(bundle.items, services ?? [], bundle.discountPercent),
       })),
     [bundles, services, t],
   );
@@ -70,78 +105,51 @@ export function useAdminTariffs() {
     patch: Partial<Pick<Service, "name" | "unitPriceTenge">>,
   ) {
     setServices((prev) =>
-      prev.map((service) => (service.id === id ? { ...service, ...patch } : service)),
+      (prev ?? []).map((service) =>
+        service.id === id ? { ...service, ...patch } : service,
+      ),
+    );
+  }
+
+  async function putService(service: Service): Promise<void> {
+    await api.put(
+      `/admin/services/${service.id}`,
+      { price: service.unitPriceTenge, is_active: service.isActive },
+      { admin: true },
     );
   }
 
   /** Вызывается по `onBlur` поля — коммит правки как значимое админ-действие (FRONT_CODING_STANDARDS.md §4.3). */
-  function commitServiceChange(service: Service) {
+  async function commitServiceChange(service: Service) {
     logger.info({
       scope: "settings.tariffs",
-      event: "service_updated",
+      event: "service_update_requested",
       data: { serviceId: service.id },
     });
-    toast(t.tariffs.serviceUpdatedToast, "success");
-  }
-
-  function openNewService() {
-    serviceModalNonceRef.current += 1;
-    setServiceModalOpen(true);
-  }
-
-  function closeServiceModal() {
-    setServiceModalOpen(false);
-  }
-
-  function addService(values: ServiceFormResult) {
-    const newService: Service = { id: crypto.randomUUID(), ...values };
-    setServices((prev) => [...prev, newService]);
-    logger.info({
-      scope: "settings.tariffs",
-      event: "service_created",
-      data: { serviceId: newService.id },
-    });
-    toast(t.tariffs.serviceCreatedToast, "success");
-    setServiceModalOpen(false);
-  }
-
-  /**
-   * Услугу, которая используется хотя бы в одном тарифе, удалить нельзя — это
-   * защита целостности цены (bundlePricing.ts#findBundleUsingService), а не
-   * пользовательский выбор, поэтому сразу error-toast, без confirm-модалки.
-   */
-  function requestDeleteService(service: Service) {
-    const blockingBundle = findBundleUsingService(bundles, service.id);
-    if (blockingBundle) {
+    try {
+      await putService(service);
       logger.info({
         scope: "settings.tariffs",
-        event: "service_delete_blocked",
-        data: { serviceId: service.id, bundleId: blockingBundle.id },
+        event: "service_updated",
+        data: { serviceId: service.id },
       });
-      toast(t.tariffs.serviceInUseError(blockingBundle.name), "error");
-      return;
+      toast(t.tariffs.serviceUpdatedToast, "success");
+    } catch (error) {
+      logger.error({ scope: "settings.tariffs", event: "service_update_failed", error });
+      toast(describeApiError(error, lang), "error");
+      // Откатываемся к последней известной серверной правде — иначе поле
+      // молча продолжит показывать значение, которое не сохранилось.
+      setServices(null);
+      void servicesQuery.refetch();
     }
+  }
 
-    logger.info({
-      scope: "settings.tariffs",
-      event: "service_delete_requested",
-      data: { serviceId: service.id },
-    });
-    openConfirm({
-      title: t.tariffs.deleteConfirmTitle,
-      message: t.tariffs.serviceDeleteConfirmMessage,
-      confirmLabel: t.tariffs.deleteAction,
-      cancelLabel: t.common.cancel,
-      onConfirm: () => {
-        setServices((prev) => prev.filter((item) => item.id !== service.id));
-        logger.info({
-          scope: "settings.tariffs",
-          event: "service_deleted",
-          data: { serviceId: service.id },
-        });
-        toast(t.tariffs.serviceDeletedToast, "success");
-      },
-    });
+  async function setServiceActive(service: Service, isActive: boolean) {
+    const updated = { ...service, isActive };
+    setServices((prev) =>
+      (prev ?? []).map((item) => (item.id === service.id ? updated : item)),
+    );
+    await commitServiceChange(updated);
   }
 
   function openNewBundle() {
@@ -158,30 +166,35 @@ export function useAdminTariffs() {
     setBundleModal({ mode: "closed" });
   }
 
-  function saveBundle(values: BundleFormResult) {
-    if (bundleModal.mode === "create") {
-      const newBundle: Bundle = { id: crypto.randomUUID(), ...values };
-      setBundles((prev) => [...prev, newBundle]);
-      logger.info({
-        scope: "settings.tariffs",
-        event: "bundle_created",
-        data: { bundleId: newBundle.id },
-      });
-    } else if (bundleModal.mode === "edit") {
-      const bundleId = bundleModal.bundle.id;
-      setBundles((prev) =>
-        prev.map((bundle) =>
-          bundle.id === bundleId ? { ...bundle, ...values } : bundle,
-        ),
-      );
-      logger.info({
-        scope: "settings.tariffs",
-        event: "bundle_updated",
-        data: { bundleId },
-      });
+  async function saveBundle(values: BundleFormResult) {
+    const body: TariffWriteRequestDto = {
+      name: values.name,
+      discount_percent: values.discountPercent,
+      items: values.items.map((item) => ({ service_id: item.serviceId, qty: item.qty })),
+    };
+    setBundleModalPending(true);
+    try {
+      if (bundleModal.mode === "create") {
+        await api.post("/admin/tariffs", body, { admin: true });
+        logger.info({ scope: "settings.tariffs", event: "bundle_created" });
+      } else if (bundleModal.mode === "edit") {
+        await api.put(`/admin/tariffs/${bundleModal.bundle.id}`, body, { admin: true });
+        logger.info({
+          scope: "settings.tariffs",
+          event: "bundle_updated",
+          data: { bundleId: bundleModal.bundle.id },
+        });
+      }
+      await queryClient.invalidateQueries({ queryKey: ["admin", "tariffs"] });
+      await queryClient.invalidateQueries({ queryKey: ["tariffs"] });
+      toast(t.tariffs.savedToast, "success");
+      closeBundleModal();
+    } catch (error) {
+      logger.error({ scope: "settings.tariffs", event: "bundle_save_failed", error });
+      toast(describeApiError(error, lang), "error");
+    } finally {
+      setBundleModalPending(false);
     }
-    toast(t.tariffs.savedToast, "success");
-    closeBundleModal();
   }
 
   function requestDeleteBundle(bundle: Bundle) {
@@ -195,31 +208,35 @@ export function useAdminTariffs() {
       message: t.tariffs.deleteConfirmMessage,
       confirmLabel: t.tariffs.deleteAction,
       cancelLabel: t.common.cancel,
-      onConfirm: () => {
-        setBundles((prev) => prev.filter((item) => item.id !== bundle.id));
+      onConfirm: async () => {
+        await api.delete(`/admin/tariffs/${bundle.id}`, { admin: true });
         logger.info({
           scope: "settings.tariffs",
           event: "bundle_deleted",
           data: { bundleId: bundle.id },
         });
+        await queryClient.invalidateQueries({ queryKey: ["admin", "tariffs"] });
+        await queryClient.invalidateQueries({ queryKey: ["tariffs"] });
         toast(t.tariffs.deleteToastSuccess, "success");
       },
     });
   }
 
   return {
-    services,
+    isLoading: servicesQuery.isLoading || tariffsQuery.isLoading,
+    isError: servicesQuery.isError || tariffsQuery.isError,
+    retry: () => {
+      void servicesQuery.refetch();
+      void tariffsQuery.refetch();
+    },
+    services: services ?? [],
     bundlesView,
     updateServiceDraft,
     commitServiceChange,
-    isServiceModalOpen,
-    serviceModalKey: `service-${serviceModalNonceRef.current}`,
-    openNewService,
-    closeServiceModal,
-    addService,
-    requestDeleteService,
+    setServiceActive,
     bundleModal,
     bundleModalKey: `${bundleModal.mode}-${modalNonceRef.current}`,
+    isBundleModalPending,
     openNewBundle,
     openEditBundle,
     closeBundleModal,

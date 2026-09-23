@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getApiBaseUrl, getApiBaseUrlSafe } from "./env";
+import { getApiBaseUrl, getApiBaseUrlSafe, getFileMaxSizeBytes } from "./env";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -22,4 +22,19 @@ describe("getApiBaseUrlSafe", () => {
     vi.stubEnv("VITE_API_BASE_URL", "");
     expect(getApiBaseUrlSafe()).toBeNull();
   });
+});
+
+describe("getFileMaxSizeBytes", () => {
+  it("читает лимит в байтах", () => {
+    vi.stubEnv("VITE_FILE_MAX_SIZE_BYTES", "15728640");
+    expect(getFileMaxSizeBytes()).toBe(15 * 1024 * 1024);
+  });
+
+  it.each(["", "15MB", "0", "-1", "1.5"])(
+    "бросает понятную ошибку на невалидном значении %j",
+    (raw) => {
+      vi.stubEnv("VITE_FILE_MAX_SIZE_BYTES", raw);
+      expect(() => getFileMaxSizeBytes()).toThrow("VITE_FILE_MAX_SIZE_BYTES");
+    },
+  );
 });

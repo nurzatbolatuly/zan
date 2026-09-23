@@ -55,8 +55,8 @@ func ParsePaymentStatus(s string) (PaymentStatus, error) {
 // Provider — всегда "mock" на этом этапе (§1: "заглушка", реальный шлюз —
 // вне скоупа, backend-roadmap.md §7). ThreadID — заполняется, когда
 // checkout вызван за конкретный тред (баланс кончился в момент открытия —
-// v2 §4.2 п.2); использование этого поля для отметки thread.is_paid=true —
-// задача Stage 3, здесь платёж только хранит связь.
+// v2 §4.2 п.2); после confirm такой платёж сразу оплачивает текущий вопрос
+// треда (thread.Service.Resume), здесь платёж только хранит связь.
 type Payment struct {
 	ID          string
 	SessionID   string
@@ -70,4 +70,3 @@ type Payment struct {
 	CreatedAt   time.Time
 	PaidAt      *time.Time
 }
-	

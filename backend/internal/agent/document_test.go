@@ -10,13 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"zan-backend/internal/domain"
-	"zan-backend/internal/grpcclient"
 )
 
 func TestGenerateDocument_HappyPath_ReturnsAnswerAndFindings(t *testing.T) {
 	llm := jsonLLMHandler(t, `{"answer_text":"Договор аренды подготовлен.","sources":[{"ref":"ст. 540 ГК РК","quote":"..."}],"findings":[{"title":"Стороны","body":"Арендодатель и арендатор..."}],"needs_clarification":false}`)
-	rag := fakeRagSearcher{matches: []grpcclient.RagMatch{{Ref: "ст. 540 ГК РК", Quote: "..."}}}
-	client := newTestClient(t, llm, fakePromptProvider{text: "document base prompt"}, rag)
+	client := newTestClient(t, llm, fakePromptProvider{text: "document base prompt"})
 
 	result, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор аренды"))
 
@@ -24,23 +22,12 @@ func TestGenerateDocument_HappyPath_ReturnsAnswerAndFindings(t *testing.T) {
 	require.Equal(t, "Договор аренды подготовлен.", result.AnswerText)
 	require.Len(t, result.Findings, 1)
 	require.Equal(t, "Стороны", result.Findings[0].Title)
-	require.False(t, result.UnverifiedSources)
-}
-
-func TestGenerateDocument_LLMCitesUnknownSource_MarksUnverified(t *testing.T) {
-	llm := jsonLLMHandler(t, `{"answer_text":"Готово","sources":[{"ref":"ст. 999 Придуманного кодекса","quote":"x"}],"findings":[],"needs_clarification":false}`)
-	rag := fakeRagSearcher{matches: []grpcclient.RagMatch{{Ref: "ст. 540 ГК РК", Quote: "..."}}}
-	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, rag)
-
-	result, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
-
-	require.NoError(t, err)
-	require.True(t, result.UnverifiedSources)
+	require.Len(t, result.Sources, 1)
 }
 
 func TestGenerateDocument_NeedsClarification_ReturnsSentinelError(t *testing.T) {
 	llm := jsonLLMHandler(t, `{"answer_text":"Уточните срок аренды","needs_clarification":true}`)
-	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, fakeRagSearcher{})
+	client := newTestClient(t, llm, fakePromptProvider{text: "base"})
 
 	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор аренды"))
 
@@ -55,7 +42,7 @@ func TestGenerateDocument_ModelRefusal_ReturnsErrModelRefused(t *testing.T) {
 			Choices: []openAIChoice{{FinishReason: refusalFinishReason}},
 		})
 	}
-	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, fakeRagSearcher{})
+	client := newTestClient(t, llm, fakePromptProvider{text: "base"})
 
 	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
 
@@ -63,12 +50,29 @@ func TestGenerateDocument_ModelRefusal_ReturnsErrModelRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrModelRefused)
 }
 
+// TestGenerateDocument_OutputTruncated_ReturnsErrOutputTruncated — JSON,
+// обрезанный по max_completion_tokens, не доходит до парсинга: причина в
+// логе — лимит токенов, а не "невалидный JSON".
+func TestGenerateDocument_OutputTruncated_ReturnsErrOutputTruncated(t *testing.T) {
+	llm := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(openAIResponse{
+			Choices: []openAIChoice{{Message: openAIMessage{Role: "assistant", Content: `{"answer_text":"нач`}, FinishReason: truncatedFinishReason}},
+		})
+	}
+	client := newTestClient(t, llm, fakePromptProvider{text: "base"})
+
+	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
+
+	require.ErrorIs(t, err, ErrOutputTruncated)
+}
+
 func TestGenerateDocument_LLMTransportError_ReturnsError(t *testing.T) {
 	llm := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`))
 	}
-	client := newTestClient(t, llm, fakePromptProvider{text: "base"}, fakeRagSearcher{})
+	client := newTestClient(t, llm, fakePromptProvider{text: "base"})
 
 	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
 
@@ -78,7 +82,7 @@ func TestGenerateDocument_LLMTransportError_ReturnsError(t *testing.T) {
 func TestGenerateDocument_PromptProviderFails_ReturnsError(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("LLM must not be called when prompt loading fails")
-	}, fakePromptProvider{err: errors.New("db unavailable")}, fakeRagSearcher{})
+	}, fakePromptProvider{err: errors.New("db unavailable")})
 
 	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
 
@@ -92,7 +96,7 @@ func TestGenerateDocument_UsesDocumentPromptType(t *testing.T) {
 		return "document prompt", nil
 	})
 	llm := jsonLLMHandler(t, `{"answer_text":"ok","needs_clarification":false}`)
-	client := newTestClient(t, llm, prompts, fakeRagSearcher{})
+	client := newTestClient(t, llm, prompts)
 
 	_, err := client.GenerateDocument(context.Background(), historyWithQuestion("Составь договор"))
 

@@ -19,8 +19,8 @@ import (
 	"zan-backend/internal/service/session"
 )
 
-// setupTestDB поднимает одноразовый Postgres (тот же образ, что и прод —
-// docker-compose.yml, pgvector/pgvector:pg16) в testcontainers, накатывает
+// setupTestDB поднимает одноразовый Postgres (postgres:16, та же мажорная
+// версия, что и прод) в testcontainers, накатывает
 // реальные миграции backend/migrations и возвращает готовый пул. Реальный
 // Postgres, не моки SQL (BACKEND_CODING_STANDARDS.md §10).
 func setupTestDB(t *testing.T) *pgxpool.Pool {
@@ -28,7 +28,7 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx,
-		"pgvector/pgvector:pg16",
+		"postgres:16",
 		tcpostgres.WithDatabase("zan_test"),
 		tcpostgres.WithUsername("zan"),
 		tcpostgres.WithPassword("zan"),

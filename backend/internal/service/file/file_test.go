@@ -84,11 +84,13 @@ func (s *fakeStorage) PresignGetInternal(_ context.Context, key string, _ time.D
 }
 
 type fakeExtractor struct {
-	text string
-	err  error
+	text  string
+	err   error
+	calls int
 }
 
 func (e *fakeExtractor) ExtractFile(context.Context, string, string) (string, error) {
+	e.calls++
 	return e.text, e.err
 }
 
@@ -104,13 +106,32 @@ func newTestService(repo *fakeRepo, storage *fakeStorage, extractor *fakeExtract
 	return file.New(repo, storage, extractor, av, clock.Fake{T: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}, &idgen.Fake{IDs: []string{"file-1", "file-2"}}, 20*1024*1024)
 }
 
-func TestService_Upload_RejectsUnsupportedMimeType(t *testing.T) {
-	svc := newTestService(newFakeRepo(), &fakeStorage{}, &fakeExtractor{}, &fakeAVScanner{})
+func TestService_Upload_AcceptsAnyMimeType(t *testing.T) {
+	tests := []struct {
+		name         string
+		mimeType     string
+		wantMimeType string
+	}{
+		{name: "known but not extractable", mimeType: "application/zip", wantMimeType: "application/zip"},
+		{name: "empty content type", mimeType: "", wantMimeType: "application/octet-stream"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := &fakeStorage{}
+			extractor := &fakeExtractor{text: "must not be used"}
+			svc := newTestService(newFakeRepo(), storage, extractor, &fakeAVScanner{})
 
-	_, _, err := svc.Upload(context.Background(), file.UploadRequest{
-		SessionID: "s1", OriginalName: "malware.exe", MimeType: "application/x-msdownload", Data: []byte("x"),
-	})
-	require.ErrorIs(t, err, file.ErrUnsupportedMimeType)
+			created, _, err := svc.Upload(context.Background(), file.UploadRequest{
+				SessionID: "s1", OriginalName: "archive.bin", MimeType: tt.mimeType, Data: []byte("x"),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.wantMimeType, created.MimeType)
+			require.Equal(t, 1, storage.putCalls)
+			require.Zero(t, extractor.calls, "non-extractable type must not reach helper/")
+			require.Equal(t, domain.FileProcessingStatusError, created.ProcessingStatus)
+			require.Nil(t, created.ExtractedText)
+		})
+	}
 }
 
 func TestService_Upload_RejectsTooLarge(t *testing.T) {

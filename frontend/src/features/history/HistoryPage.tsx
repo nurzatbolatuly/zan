@@ -1,14 +1,13 @@
 import { useNavigate } from "react-router-dom";
-import { Button, EmptyState } from "@/shared/ui";
+import { Button, EmptyState, Skeleton } from "@/shared/ui";
 import { useLangStore } from "@/shared/stores/useLangStore";
 import { HistoryFilters } from "./HistoryFilters";
 import { ThreadCard } from "./ThreadCard";
 import { useThreadHistory } from "./useThreadHistory";
 
 /**
- * Stage 2 (PLAN.md §5) — заменяет плейсхолдер Stage 0 целиком
+ * Stage 2 (PLAN.md §5), подключена к реальному `GET /threads` в Stage 6
  * (FRONT_CODING_STANDARDS.md §3, «чистая замена, а не наслоение»).
- * Зависит только от Stage 0 (`shared/ui`, `useConfirmModalStore`).
  */
 export function HistoryPage() {
   const navigate = useNavigate();
@@ -16,7 +15,13 @@ export function HistoryPage() {
   const {
     dictionary,
     threads,
+    isLoading,
+    isError,
+    retry,
     hasAnyThreads,
+    hasMore,
+    isLoadingMore,
+    loadMore,
     isFiltered,
     searchInput,
     setSearchInput,
@@ -45,7 +50,22 @@ export function HistoryPage() {
         />
       )}
 
-      {!hasAnyThreads && (
+      {isError && (
+        <EmptyState
+          title={dictionary.loadError}
+          action={<Button onClick={retry}>{dictionary.retry}</Button>}
+        />
+      )}
+
+      {!isError && isLoading && (
+        <div className="flex flex-col gap-2.5">
+          {Array.from({ length: 3 }, (_, index) => (
+            <Skeleton key={index} className="h-24" />
+          ))}
+        </div>
+      )}
+
+      {!isError && !isLoading && !hasAnyThreads && (
         <EmptyState
           title={dictionary.emptyNoThreadsTitle}
           description={dictionary.emptyNoThreadsBody}
@@ -53,7 +73,7 @@ export function HistoryPage() {
         />
       )}
 
-      {hasAnyThreads && threads.length === 0 && (
+      {!isError && !isLoading && hasAnyThreads && threads.length === 0 && (
         <EmptyState
           title={dictionary.emptyNoResultsTitle}
           description={dictionary.emptyNoResultsBody}
@@ -67,7 +87,7 @@ export function HistoryPage() {
         />
       )}
 
-      {threads.length > 0 && (
+      {!isError && !isLoading && threads.length > 0 && (
         <div className="flex flex-col gap-2.5">
           {threads.map((thread) => (
             <ThreadCard
@@ -77,6 +97,16 @@ export function HistoryPage() {
               onDelete={requestDelete}
             />
           ))}
+          {hasMore && (
+            <Button
+              variant="secondary"
+              onClick={loadMore}
+              disabled={isLoadingMore}
+              className="self-center"
+            >
+              {isLoadingMore ? "…" : dictionary.loadMore}
+            </Button>
+          )}
         </div>
       )}
     </div>

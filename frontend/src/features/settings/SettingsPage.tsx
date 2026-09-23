@@ -5,6 +5,7 @@ import { useLangStore } from "@/shared/stores/useLangStore";
 import { useUnsavedChangesStore } from "@/shared/stores/useUnsavedChangesStore";
 import { navDictionary } from "@/shared/locales/nav";
 import { settingsDictionary } from "./locales";
+import { AdminGate } from "./components/AdminGate";
 import { PromptsTab } from "./components/PromptsTab";
 import { TariffsTab } from "./components/TariffsTab";
 import { AnalyticsTab } from "./components/AnalyticsTab";
@@ -48,24 +49,26 @@ export function SettingsPage() {
       <h1 className="mb-1.5 text-h1 text-ink">{t.title}</h1>
       <p className="mb-5 text-body text-muted">{t.subtitle}</p>
 
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        <Tabs
-          layout="sidebar"
-          activeKey={tab}
-          onChange={handleTabChange}
-          items={[
-            { key: "prompts", label: t.tabPrompts },
-            { key: "tariffs", label: t.tabTariffs },
-            { key: "analytics", label: t.tabAnalytics },
-          ]}
-        />
+      <AdminGate>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+          <Tabs
+            layout="sidebar"
+            activeKey={tab}
+            onChange={handleTabChange}
+            items={[
+              { key: "prompts", label: t.tabPrompts },
+              { key: "tariffs", label: t.tabTariffs },
+              { key: "analytics", label: t.tabAnalytics },
+            ]}
+          />
 
-        <div className="min-w-0 flex-1">
-          {tab === "prompts" && <PromptsTab />}
-          {tab === "tariffs" && <TariffsTab />}
-          {tab === "analytics" && <AnalyticsTab />}
+          <div className="min-w-0 flex-1">
+            {tab === "prompts" && <PromptsTab />}
+            {tab === "tariffs" && <TariffsTab />}
+            {tab === "analytics" && <AnalyticsTab />}
+          </div>
         </div>
-      </div>
+      </AdminGate>
     </div>
   );
 }

@@ -20,6 +20,7 @@ import (
 	"zan-backend/internal/service/session"
 	"zan-backend/internal/service/thread"
 	"zan-backend/internal/service/voice"
+	"zan-backend/internal/wshub"
 )
 
 // Deps — зависимости, которые NewRouter пробрасывает хендлерам. Собираются
@@ -27,10 +28,15 @@ import (
 // BACKEND_CODING_STANDARDS.md §1.1/§2) и растут по мере стадий
 // (BACKEND_PLAN.md) — Stage 4 добавляет файлы/голос.
 type Deps struct {
-	Sessions            *session.Service
-	Catalog             *catalog.Service
-	Billing             *billing.Service
-	Thread              *thread.Service
+	Sessions *session.Service
+	Catalog  *catalog.Service
+	Billing  *billing.Service
+	Thread   *thread.Service
+	// Hub — Stage 9, WS-стриминг статуса и токенов ответа (GET
+	// /ws/threads/{id} — ws_thread.go). Один экземпляр на процесс, собран
+	// в cmd/api (composition root) и передан также в thread.New как
+	// EventPublisher — тот же *wshub.Hub с двух сторон.
+	Hub                 *wshub.Hub
 	Documents           *document.Service
 	Files               *file.Service
 	Voice               *voice.Service
@@ -98,6 +104,7 @@ func NewRouter(baseLogger *slog.Logger, deps Deps) *gin.Engine {
 	threadAuthed.GET("/threads", listThreadsHandler(deps.Thread))
 	threadAuthed.GET("/threads/:id", getThreadHandler(deps.Thread))
 	threadAuthed.POST("/threads/:id/messages", addMessageHandler(deps.Thread))
+	threadAuthed.POST("/threads/:id/resume", resumeThreadHandler(deps.Thread))
 	threadAuthed.POST("/threads/:id/cancel", cancelThreadHandler(deps.Thread))
 	threadAuthed.DELETE("/threads/:id", deleteThreadHandler(deps.Thread))
 	threadAuthed.POST("/messages/:id/feedback", messageFeedbackHandler(deps.Thread))
@@ -106,6 +113,14 @@ func NewRouter(baseLogger *slog.Logger, deps Deps) *gin.Engine {
 	// сессионная группа маршрутов.
 	threadAuthed.POST("/threads/:id/generate-document", generateDocumentHandler(deps.Documents))
 	threadAuthed.GET("/threads/:id/document", getThreadDocumentHandler(deps.Documents))
+
+	// WS-стриминг статуса/ответа треда (Stage 9, ws_thread.go) — отдельная
+	// сессионная группа под /ws, не threadAuthed: WS-хендшейк — обычный GET,
+	// но с апгрейдом протокола, держать его физически отдельно от REST-путей
+	// того же ресурса яснее читается в списке маршрутов, чем ветвление внутри
+	// одной группы.
+	wsAuthed := r.Group("/ws", SessionAuth(deps.Sessions))
+	wsAuthed.GET("/threads/:id", threadWebSocketHandler(deps.Hub, deps.Thread, deps.CORSAllowedOrigins))
 
 	// Файлы/голос (zan-backend-tz-v2.md §3.3, Stage 4) — та же сессионная группа.
 	filesAuthed := r.Group("/", SessionAuth(deps.Sessions))

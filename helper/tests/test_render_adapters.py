@@ -1,7 +1,7 @@
 """DocxTplRenderer — реальный docxtpl на настоящем шаблоне (не мок,
 BACKEND_CODING_STANDARDS.md §10). WeasyPrintRenderer требует системных
-libcairo/libpango, которых нет в локальном dev-окружении без Docker —
-проверяется в docker compose (см. scripts/smoke-test.sh), не здесь."""
+libcairo/libpango, которых нет в локальном dev-окружении — проверяется
+вручную в собранном Docker-образе helper/, не здесь."""
 
 import io
 

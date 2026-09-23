@@ -1,49 +1,50 @@
-import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal } from "@/shared/ui/Modal";
 import { Button } from "@/shared/ui/Button";
+import { api } from "@/shared/lib/api";
 import { logger } from "@/shared/lib/logger";
 import type { ChatDictionary } from "../locales";
-
-const ONBOARDING_STORAGE_KEY = "zan.chat.onboarding-seen";
-
-function hasSeenOnboarding(): boolean {
-  try {
-    return localStorage.getItem(ONBOARDING_STORAGE_KEY) === "1";
-  } catch (error) {
-    logger.error({ scope: "chat.onboarding", event: "storage_read_failed", error });
-    return false;
-  }
-}
-
-function markOnboardingSeen(): void {
-  try {
-    localStorage.setItem(ONBOARDING_STORAGE_KEY, "1");
-  } catch (error) {
-    logger.error({ scope: "chat.onboarding", event: "storage_write_failed", error });
-  }
-}
+import type { Session } from "@/shared/types/api";
 
 interface OnboardingModalProps {
   t: ChatDictionary;
 }
 
 /**
- * M5 — только на Chat, показывается один раз (флаг в localStorage, не в
- * проп, как было в прототипе Zan.dc.html:817 — см. PLAN.md Stage 1).
+ * M5 — только на Chat, показывается один раз. Stage 6: источник истины —
+ * `Session.onboarding_seen` (openapi.yaml), не `localStorage` — сессия уже
+ * анонимная и персистентная (bearer-токен), реальный флаг переживает смену
+ * устройства/браузерного профиля так же, как переживал бы localStorage на
+ * одном устройстве, но синхронно с остальным состоянием сессии (язык/тема).
  */
 export function OnboardingModal({ t }: OnboardingModalProps) {
-  const [isOpen, setIsOpen] = useState(() => !hasSeenOnboarding());
+  const queryClient = useQueryClient();
+  const sessionQuery = useQuery({
+    queryKey: ["session"],
+    queryFn: () => api.get<Session>("/sessions/me"),
+  });
 
-  function handleClose() {
+  const isOpen = sessionQuery.data?.onboarding_seen === false;
+
+  async function handleClose() {
     logger.info({ scope: "chat.onboarding", event: "dismissed" });
-    markOnboardingSeen();
-    setIsOpen(false);
+    // Оптимистично — не ждём ответ сети, чтобы закрыть модалку: сбой этого
+    // конкретного POST не критичен, худший случай — онбординг покажется ещё
+    // раз в следующей сессии.
+    queryClient.setQueryData<Session>(["session"], (prev) =>
+      prev ? { ...prev, onboarding_seen: true } : prev,
+    );
+    try {
+      await api.post("/sessions/onboarding-seen");
+    } catch (error) {
+      logger.error({ scope: "chat.onboarding", event: "mark_seen_failed", error });
+    }
   }
 
   return (
     <Modal
       open={isOpen}
-      onClose={handleClose}
+      onClose={() => void handleClose()}
       ariaLabel={t.onboardingTitle}
       z="overlay-high"
     >
@@ -66,7 +67,7 @@ export function OnboardingModal({ t }: OnboardingModalProps) {
         {t.onboardingDisclaimer}
       </div>
 
-      <Button onClick={handleClose} className="w-full">
+      <Button onClick={() => void handleClose()} className="w-full">
         {t.onboardingCta}
       </Button>
     </Modal>

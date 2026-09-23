@@ -21,7 +21,10 @@ type generateDocumentBody struct {
 }
 
 // createPaidThread — создаёт тред с достаточным балансом "qa" (fakeAgent
-// синхронно отвечает Done, см. router_test.go), возвращает его id.
+// отвечает Done почти мгновенно, но асинхронно — Stage 9, см.
+// router_test.go/thread.Service#dispatchProcessing), дожидается завершения
+// фонового раунда и возвращает id уже готового (done) треда — вызывающий
+// код (generate-document и т.п.) требует активный, обработанный тред.
 func createPaidThread(t *testing.T, router http.Handler, token string) string {
 	t.Helper()
 	paymentID, _, status := checkout(t, router, token, map[string]any{
@@ -39,7 +42,8 @@ func createPaidThread(t *testing.T, router http.Handler, token string) string {
 	require.Equal(t, http.StatusCreated, rec.Code)
 	var created threadDetailBody
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created))
-	return created.ID
+	final := waitForThreadStatus(t, router, token, created.ID)
+	return final.ID
 }
 
 func generateDocument(t *testing.T, router http.Handler, token, threadID string) *httptest.ResponseRecorder {

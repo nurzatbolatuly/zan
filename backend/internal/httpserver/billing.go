@@ -97,7 +97,7 @@ type paymentResponse struct {
 	Amount   int     `json:"amount"`
 	Status   string  `json:"status"`
 	Provider string  `json:"provider"`
-	PaidAt   *string `json:"paid_at,omitempty"`
+	PaidAt   *string `json:"paid_at"`
 }
 
 func newPaymentResponse(p domain.Payment) paymentResponse {
@@ -136,11 +136,12 @@ func getPaymentHandler(svc *billing.Service) gin.HandlerFunc {
 
 // confirmPaymentHandler — POST /payments/{id}/confirm. Требует SessionAuth.
 // Идемпотентно (zan-backend-tz-v3.md §5.1). threadSvc — Stage 3
-// (zan-backend-tz-v2.md §4.2 п.2, BACKEND_LOG.md "Открыто для Stage 3+"):
-// когда платёж привязан к треду (checkout {..., thread_id}), успешный
-// confirm сразу активирует тред (списание уже произошло billing'ом выше —
-// thread.ActivateAfterPayment лишь проставляет is_paid/free_until и
-// синхронно запускает обработку, "купил и тут же потратил").
+// (zan-backend-tz-v2.md §4.2 п.2): когда платёж привязан к треду
+// (checkout {..., thread_id}), успешный confirm сразу пытается запустить
+// тред — billing выше начислил единицу на баланс, thread.Resume списывает
+// её и стартует обработку, "купил и тут же потратил". Тред не в
+// awaiting_payment (например, доплата за doc) — Resume no-op, единица
+// остаётся на балансе.
 func confirmPaymentHandler(svc *billing.Service, threadSvc *thread.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sess := sessionFromGin(c)
@@ -165,7 +166,7 @@ func confirmPaymentHandler(svc *billing.Service, threadSvc *thread.Service) gin.
 		}
 
 		if p.Status == domain.PaymentStatusSuccess && p.ThreadID != nil {
-			if _, err := threadSvc.ActivateAfterPayment(c.Request.Context(), *p.ThreadID, sess.ID, sess.Language); err != nil {
+			if _, err := threadSvc.Resume(c.Request.Context(), *p.ThreadID, sess.ID, sess.Language); err != nil {
 				// Платёж уже подтверждён и это отдаётся клиенту как успех —
 				// тред просто не стартовал синхронно вместе с ним. Клиент
 				// увидит его через GET /threads/{id} (polling,

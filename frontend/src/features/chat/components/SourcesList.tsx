@@ -1,9 +1,9 @@
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/shared/lib/cn";
-import type { ChatSource } from "../types";
+import type { SourceDto } from "@/shared/types/api";
 
 interface SourcesListProps {
-  sources: ChatSource[];
+  sources: SourceDto[];
   isOpen: boolean;
   onToggle: () => void;
   toggleLabel: (count: number) => string;

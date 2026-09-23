@@ -263,6 +263,10 @@ func (r *fakeThreadRepo) GetMessages(_ context.Context, threadID string) ([]doma
 	return out, nil
 }
 
+func (r *fakeThreadRepo) GetConversation(ctx context.Context, threadID string) ([]domain.Message, error) {
+	return r.GetMessages(ctx, threadID)
+}
+
 func (r *fakeThreadRepo) ListThreads(_ context.Context, sessionID string, filter thread.ListFilter) ([]domain.Thread, int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -319,37 +323,6 @@ func (r *fakeThreadRepo) UpdateStatus(_ context.Context, id string, from []domai
 	t.PreviewText = previewText
 	r.threads[id] = t
 	return t, true, nil
-}
-
-func (r *fakeThreadRepo) ActivatePaid(_ context.Context, id string, paidAt, freeUntil time.Time, previewText string) (domain.Thread, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	t, ok := r.threads[id]
-	if !ok {
-		return domain.Thread{}, false, thread.ErrThreadNotFound
-	}
-	if t.Status != domain.ThreadStatusQueued || t.IsPaid {
-		return domain.Thread{}, false, nil
-	}
-	t.IsPaid = true
-	t.PaidAt = &paidAt
-	t.FreeUntil = &freeUntil
-	t.Status = domain.ThreadStatusProcessing
-	t.PreviewText = previewText
-	r.threads[id] = t
-	return t, true, nil
-}
-
-func (r *fakeThreadRepo) CloseIfExpired(_ context.Context, id string, now time.Time) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	t, ok := r.threads[id]
-	if !ok || t.ClosedAt != nil {
-		return false, nil
-	}
-	t.ClosedAt = &now
-	r.threads[id] = t
-	return true, nil
 }
 
 func (r *fakeThreadRepo) SoftDelete(_ context.Context, id string, now time.Time) (bool, error) {

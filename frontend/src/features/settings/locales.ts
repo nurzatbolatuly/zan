@@ -1,6 +1,7 @@
 import type { Lang, ThreadStatus } from "@/shared/types/common";
 import type { ServiceId } from "@/shared/types/tariff";
 import { pluralRu } from "@/shared/lib/format";
+import type { AgentPromptKey } from "./types";
 
 interface SettingsDictionary {
   common: {
@@ -13,6 +14,15 @@ interface SettingsDictionary {
     accessDeniedBody: string;
     save: string;
     cancel: string;
+    /** Общая ошибка/повтор для всех трёх вкладок (Stage 6 — все читают `/admin/*`). */
+    loadError: string;
+    retry: string;
+  };
+  adminGate: {
+    title: string;
+    subtitle: string;
+    tokenLabel: string;
+    submit: string;
   };
   prompts: {
     title: string;
@@ -20,6 +30,8 @@ interface SettingsDictionary {
     savedNote: string;
     unsavedGuardMessage: string;
     requiredError: string;
+    /** label/hint — чистый UI-копирайт, бэк отдаёт только `agent_type`/`prompt_text`. */
+    labels: Record<AgentPromptKey, { label: string; hint: string }>;
   };
   tariffs: {
     servicesTitle: string;
@@ -40,15 +52,11 @@ interface SettingsDictionary {
     increaseQuantityLabel: (serviceName: string) => string;
     /** "−15%" — та же формула, что и у Stage 3 (features/tariffs/locales.ts#discountLabel). */
     discountLabel: (percent: number) => string;
-    addServiceLabel: string;
-    newServiceTitle: string;
-    serviceTypeRequiredError: string;
-    serviceNameRequiredError: string;
-    servicePriceRequiredError: string;
-    serviceCreatedToast: string;
-    serviceDeleteConfirmMessage: string;
-    serviceDeletedToast: string;
-    serviceInUseError: (bundleName: string) => string;
+    /** Каталог услуг фиксирован миграцией на бэке (Stage 6) — create/delete
+     * услуги больше нет, есть только переключатель активности. */
+    serviceActiveLabel: string;
+    serviceInactiveLabel: string;
+    serviceToggleActiveLabel: (serviceName: string, willBeActive: boolean) => string;
     bundlesTitle: string;
     bundlesSub: string;
     addTariff: string;
@@ -72,6 +80,9 @@ interface SettingsDictionary {
     metricTotal: string;
     metricAvgTime: string;
     metricSatisfaction: string;
+    /** `avg_processing_time_sec`/`satisfaction_rate` отсутствуют в ответе,
+     * пока не накопилось данных (openapi.yaml — `omitempty`, не `0`). */
+    noDataYet: string;
     byStatusTitle: string;
     statusLabel: Record<ThreadStatus, string>;
   };
@@ -102,6 +113,14 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       accessDeniedBody: "Этот раздел доступен только администраторам.",
       save: "Сохранить",
       cancel: "Отмена",
+      loadError: "Не удалось загрузить данные.",
+      retry: "Повторить",
+    },
+    adminGate: {
+      title: "Вход для администратора",
+      subtitle: "Введите admin-токен, чтобы открыть настройки.",
+      tokenLabel: "Admin-токен",
+      submit: "Войти",
     },
     prompts: {
       title: "Промпты агентов",
@@ -109,6 +128,16 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       savedNote: "Сохранено",
       unsavedGuardMessage: "Изменения в промптах агентов не будут сохранены.",
       requiredError: "Промпт не может быть пустым",
+      labels: {
+        qa: {
+          label: "Агент «Вопрос-ответ»",
+          hint: "Системный промпт основного агента: тон, обязательные цитаты, ограничения.",
+        },
+        document: {
+          label: "Агент «Работа с документами»",
+          hint: "Промпт для анализа загруженных файлов и генерации документов.",
+        },
+      },
     },
     tariffs: {
       servicesTitle: "Услуги",
@@ -125,17 +154,10 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       decreaseQuantityLabel: (serviceName) => `Уменьшить количество: ${serviceName}`,
       increaseQuantityLabel: (serviceName) => `Увеличить количество: ${serviceName}`,
       discountLabel: (percent) => `−${percent}%`,
-      addServiceLabel: "Добавить услугу",
-      newServiceTitle: "Новая услуга",
-      serviceTypeRequiredError: "Укажите тип услуги",
-      serviceNameRequiredError: "Укажите название услуги",
-      servicePriceRequiredError: "Цена должна быть больше нуля",
-      serviceCreatedToast: "Услуга добавлена",
-      serviceDeleteConfirmMessage:
-        "Услуга будет удалена и больше не появится в списке. Действие нельзя отменить.",
-      serviceDeletedToast: "Услуга удалена",
-      serviceInUseError: (bundleName) =>
-        `Нельзя удалить: услуга используется в тарифе «${bundleName}».`,
+      serviceActiveLabel: "Активна",
+      serviceInactiveLabel: "Отключена",
+      serviceToggleActiveLabel: (serviceName, willBeActive) =>
+        `${willBeActive ? "Включить" : "Отключить"} услугу: ${serviceName}`,
       bundlesTitle: "Тарифы (наборы услуг)",
       bundlesSub: "Соберите тариф из услуг и, если нужно, дайте скидку.",
       addTariff: "Добавить тариф",
@@ -160,11 +182,11 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       metricTotal: "Всего запросов",
       metricAvgTime: "Среднее время ответа",
       metricSatisfaction: "Доля «полезно»",
+      noDataYet: "Пока нет данных",
       byStatusTitle: "По статусам",
       statusLabel: {
-        queued: "В очереди",
+        awaiting_payment: "Ожидает оплаты",
         processing: "Обрабатывается",
-        clarify: "Ждёт уточнения",
         done: "Готово",
         error: "Ошибка",
         canceled: "Отменён",
@@ -183,6 +205,14 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       accessDeniedBody: "Бұл бөлім тек әкімшілерге қолжетімді.",
       save: "Сақтау",
       cancel: "Болдырмау",
+      loadError: "Деректерді жүктеу мүмкін болмады.",
+      retry: "Қайталау",
+    },
+    adminGate: {
+      title: "Әкімші кірісі",
+      subtitle: "Баптауларды ашу үшін admin-токенді енгізіңіз.",
+      tokenLabel: "Admin-токен",
+      submit: "Кіру",
     },
     prompts: {
       title: "Агент промпттары",
@@ -190,6 +220,16 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       savedNote: "Сақталды",
       unsavedGuardMessage: "Агент промпттарындағы өзгерістер сақталмайды.",
       requiredError: "Промпт бос болмауы керек",
+      labels: {
+        qa: {
+          label: "«Сұрақ-жауап» агенті",
+          hint: "Негізгі агенттің жүйелік промпты: тон, міндетті дәйексөздер, шектеулер.",
+        },
+        document: {
+          label: "«Құжаттармен жұмыс» агенті",
+          hint: "Жүктелген файлдарды талдау және құжат дайындау промпты.",
+        },
+      },
     },
     tariffs: {
       servicesTitle: "Қызметтер",
@@ -206,17 +246,10 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       decreaseQuantityLabel: (serviceName) => `Санын азайту: ${serviceName}`,
       increaseQuantityLabel: (serviceName) => `Санын көбейту: ${serviceName}`,
       discountLabel: (percent) => `−${percent}%`,
-      addServiceLabel: "Қызмет қосу",
-      newServiceTitle: "Жаңа қызмет",
-      serviceTypeRequiredError: "Қызмет түрін көрсетіңіз",
-      serviceNameRequiredError: "Қызмет атауын көрсетіңіз",
-      servicePriceRequiredError: "Баға нөлден үлкен болуы керек",
-      serviceCreatedToast: "Қызмет қосылды",
-      serviceDeleteConfirmMessage:
-        "Қызмет жойылады және тізімде көрінбейді. Бұл әрекетті болдырмау мүмкін емес.",
-      serviceDeletedToast: "Қызмет жойылды",
-      serviceInUseError: (bundleName) =>
-        `Жоюға болмайды: қызмет «${bundleName}» тарифінде қолданылады.`,
+      serviceActiveLabel: "Белсенді",
+      serviceInactiveLabel: "Өшірілген",
+      serviceToggleActiveLabel: (serviceName, willBeActive) =>
+        `Қызметті ${willBeActive ? "қосу" : "өшіру"}: ${serviceName}`,
       bundlesTitle: "Тарифтер (қызметтер жиынтығы)",
       bundlesSub: "Қызметтерден тариф құрастырыңыз, қажет болса жеңілдік беріңіз.",
       addTariff: "Тариф қосу",
@@ -241,11 +274,11 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       metricTotal: "Барлық сұраныстар",
       metricAvgTime: "Орташа жауап уақыты",
       metricSatisfaction: "«Пайдалы» үлесі",
+      noDataYet: "Деректер әлі жоқ",
       byStatusTitle: "Статустар бойынша",
       statusLabel: {
-        queued: "Кезекте",
+        awaiting_payment: "Төлемді күтуде",
         processing: "Өңделуде",
-        clarify: "Нақтылауды күтуде",
         done: "Дайын",
         error: "Қате",
         canceled: "Тоқтатылған",

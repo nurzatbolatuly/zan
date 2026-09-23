@@ -6,8 +6,10 @@ import (
 )
 
 // Thread — обращение/консультация (zan-backend-tz-v2.md §2.6), со
-// статус-машиной (thread_status.go). ServiceID — какая услуга была/будет
-// списана на открытие (`qa`/`doc`). Title/PreviewText/MessageCount —
+// статус-машиной (thread_status.go). ServiceID — какая услуга списывается
+// с баланса за КАЖДЫЙ вопрос треда (`qa`/`doc`): один вопрос = одна
+// консультация, бесплатных уточнений нет. Оплачен ли текущий вопрос —
+// видно только по Status (awaiting_payment), отдельного флага нет. Title/PreviewText/MessageCount —
 // денормализация для истории (§4.5), поддерживается на каждой мутации
 // вызывающим кодом (internal/service/thread), не триггером БД.
 type Thread struct {
@@ -18,12 +20,8 @@ type Thread struct {
 	Title         string
 	PreviewText   string
 	MessageCount  int
-	IsPaid        bool
-	PaidAt        *time.Time
-	FreeUntil     *time.Time
 	CreatedAt     time.Time
 	LastMessageAt *time.Time
-	ClosedAt      *time.Time
 	DeletedAt     *time.Time
 }
 
@@ -31,15 +29,6 @@ type Thread struct {
 // GET /threads и недоступен по GET /threads/{id}.
 func (t Thread) IsDeleted() bool {
 	return t.DeletedAt != nil
-}
-
-// IsClosed — free_until истёк (§4.3): новое сообщение по теме требует
-// нового треда (новое списание), в этот же тред больше нельзя писать.
-func (t Thread) IsClosed(now time.Time) bool {
-	if t.ClosedAt != nil {
-		return true
-	}
-	return t.FreeUntil != nil && !now.Before(*t.FreeUntil)
 }
 
 // MessageSender — кто написал сообщение (zan-backend-tz-v2.md §2.7).
@@ -102,8 +91,8 @@ func ParseMessageFeedback(s string) (MessageFeedback, error) {
 }
 
 // Source — статья закона, привязанная к ответу (zan-backend-tz-v2.md
-// §2.7/§4.6: `[{ref, quote}]`). Верификация источников (сверка с реальным
-// RAG-корпусом) — Stage 5, здесь только форма значения.
+// §2.7/§4.6: `[{ref, quote}]`) — заполняется генерацией документа
+// (структурированный JSON-ответ LLM); Q&A-ответ источников не несёт.
 type Source struct {
 	Ref   string
 	Quote string
@@ -117,23 +106,22 @@ type Finding struct {
 }
 
 // Message — сообщение внутри Thread (zan-backend-tz-v2.md §2.7).
-// UnverifiedSources — Stage 5 (backend-roadmap.md §6 открытый вопрос №11:
-// "бэк-часть — флаг unverified_sources в ответе — реализуется в любом
-// случае"), считается internal/agent.verifySources сразу после ответа LLM,
-// валиден только для Sender=Assistant (у пользовательских сообщений всегда
-// false) — не проверка "хорошего тона", а сигнал, что LLM процитировала
-// источник вне того, что реально вернул RAG (подозрение на галлюцинацию
-// закона, backend-roadmap.md §1.4).
 type Message struct {
-	ID                string
-	ThreadID          string
-	Sender            MessageSender
-	InputType         MessageInputType
-	Text              string
-	Sources           []Source
-	Findings          []Finding
-	UnverifiedSources bool
-	Feedback          *MessageFeedback
-	ProcessingTimeMs  *int
-	CreatedAt         time.Time
+	ID               string
+	ThreadID         string
+	Sender           MessageSender
+	InputType        MessageInputType
+	Text             string
+	Sources          []Source
+	Findings         []Finding
+	Feedback         *MessageFeedback
+	ProcessingTimeMs *int
+	CreatedAt        time.Time
+
+	// Attachments — файлы, прикреплённые пользователем к сообщению.
+	// ExtractedText заполнен только в истории для LLM
+	// (ThreadRepo.GetConversation); GetMessages (REST) отдаёт метаданные без
+	// него — извлечённый текст не нужен клиенту и не тянется на каждое
+	// чтение треда.
+	Attachments []FileAttachment
 }

@@ -35,33 +35,48 @@ type findingResponse struct {
 }
 
 // messageResponse — Message (zan-backend-tz-v2.md §2.7).
-// UnverifiedSources — Stage 5 (backend-roadmap.md §6 открытый вопрос №11):
-// бэк отдаёт флаг в любом случае, решение "показывать ли" в UI — за
-// фронтом. Без omitempty (как is_paid у threadResponse) — false для
-// пользовательских сообщений и валидных ответов ассистента одинаково
-// значимо, не "поле отсутствует".
 type messageResponse struct {
-	ID                string            `json:"id"`
-	Sender            string            `json:"sender"`
-	InputType         string            `json:"input_type"`
-	Text              string            `json:"text"`
-	Sources           []sourceResponse  `json:"sources,omitempty"`
-	Findings          []findingResponse `json:"findings,omitempty"`
-	UnverifiedSources bool              `json:"unverified_sources"`
-	Feedback          *string           `json:"feedback,omitempty"`
-	ProcessingTimeMs  *int              `json:"processing_time_ms,omitempty"`
-	CreatedAt         string            `json:"created_at"`
+	ID               string            `json:"id"`
+	Sender           string            `json:"sender"`
+	InputType        string            `json:"input_type"`
+	Text             string            `json:"text"`
+	Sources          []sourceResponse  `json:"sources,omitempty"`
+	Findings         []findingResponse `json:"findings,omitempty"`
+	Feedback         *string           `json:"feedback"`
+	ProcessingTimeMs *int              `json:"processing_time_ms"`
+	CreatedAt        string            `json:"created_at"`
+	// Attachments — всегда массив (пустой, если файлов нет), не omitempty:
+	// в контракте поле обязательное (openapi.yaml#Message).
+	Attachments []messageAttachmentResponse `json:"attachments"`
+}
+
+// messageAttachmentResponse — openapi.yaml#MessageAttachment: карточка
+// файла в сообщении (без ссылки — она presigned и перевыпускается
+// GET /files/{id}, без извлечённого текста).
+type messageAttachmentResponse struct {
+	FileID       string `json:"file_id"`
+	OriginalName string `json:"original_name"`
+	MimeType     string `json:"mime_type"`
+	SizeBytes    int64  `json:"size_bytes"`
 }
 
 func newMessageResponse(m domain.Message) messageResponse {
 	resp := messageResponse{
-		ID:                m.ID,
-		Sender:            string(m.Sender),
-		InputType:         string(m.InputType),
-		Text:              m.Text,
-		UnverifiedSources: m.UnverifiedSources,
-		ProcessingTimeMs:  m.ProcessingTimeMs,
-		CreatedAt:         formatTime(m.CreatedAt),
+		ID:               m.ID,
+		Sender:           string(m.Sender),
+		InputType:        string(m.InputType),
+		Text:             m.Text,
+		ProcessingTimeMs: m.ProcessingTimeMs,
+		CreatedAt:        formatTime(m.CreatedAt),
+		Attachments:      make([]messageAttachmentResponse, 0, len(m.Attachments)),
+	}
+	for _, f := range m.Attachments {
+		resp.Attachments = append(resp.Attachments, messageAttachmentResponse{
+			FileID:       f.ID,
+			OriginalName: f.OriginalName,
+			MimeType:     f.MimeType,
+			SizeBytes:    f.SizeBytes,
+		})
 	}
 	for _, src := range m.Sources {
 		resp.Sources = append(resp.Sources, sourceResponse{Ref: src.Ref, Quote: src.Quote})
@@ -78,6 +93,10 @@ func newMessageResponse(m domain.Message) messageResponse {
 
 // threadResponse — Thread без сообщений, используется в списке GET /threads
 // (zan-backend-tz-v2.md §2.6).
+//
+// Nullable-поля (указатели) — без omitempty: контракт (openapi.yaml#Thread,
+// frontend shared/types/api.ts) — "всегда присутствует, null = нет
+// значения" (пропущенное поле фронт прочитал бы как undefined, не null).
 type threadResponse struct {
 	ID            string  `json:"id"`
 	ServiceID     string  `json:"service_id"`
@@ -85,12 +104,8 @@ type threadResponse struct {
 	Title         string  `json:"title"`
 	PreviewText   string  `json:"preview_text"`
 	MessageCount  int     `json:"message_count"`
-	IsPaid        bool    `json:"is_paid"`
-	PaidAt        *string `json:"paid_at,omitempty"`
-	FreeUntil     *string `json:"free_until,omitempty"`
 	CreatedAt     string  `json:"created_at"`
-	LastMessageAt *string `json:"last_message_at,omitempty"`
-	ClosedAt      *string `json:"closed_at,omitempty"`
+	LastMessageAt *string `json:"last_message_at"`
 }
 
 func newThreadResponse(t domain.Thread) threadResponse {
@@ -101,18 +116,22 @@ func newThreadResponse(t domain.Thread) threadResponse {
 		Title:         t.Title,
 		PreviewText:   t.PreviewText,
 		MessageCount:  t.MessageCount,
-		IsPaid:        t.IsPaid,
-		PaidAt:        formatTimePtr(t.PaidAt),
-		FreeUntil:     formatTimePtr(t.FreeUntil),
 		CreatedAt:     formatTime(t.CreatedAt),
 		LastMessageAt: formatTimePtr(t.LastMessageAt),
-		ClosedAt:      formatTimePtr(t.ClosedAt),
 	}
 }
 
 // threadDetailResponse — Thread + сообщения, GET /threads/{id} и ответ
-// POST /threads, POST /threads/{id}/messages (синхронная заглушка агента —
-// ответ ассистента уже готов к моменту ответа на запрос, Stage 3).
+// POST /threads, POST /threads/{id}/messages, POST /threads/{id}/resume.
+// С Stage 9 (WS-стриминг, фоновая обработка —
+// internal/service/thread#dispatchProcessing) ответ этих POST отражает тред
+// СРАЗУ после перехода в Processing (или остаётся AwaitingPayment, если
+// баланс не позволил старт) — БЕЗ нового сообщения
+// ассистента, оно ещё не сгенерировано. Финальный переход статуса и сам
+// ответ ассистента приходят клиенту через GET /ws/threads/{id}
+// (ws_thread.go), не в этом ответе; GET /threads/{id} остаётся
+// синхронным источником правды для клиента, у которого нет активного
+// WS-соединения (переподключение/повторный визит).
 type threadDetailResponse struct {
 	threadResponse
 	Messages []messageResponse `json:"messages"`
@@ -277,6 +296,27 @@ func addMessageHandler(svc *thread.Service) gin.HandlerFunc {
 	}
 }
 
+// resumeThreadHandler — POST /threads/{id}/resume: «перезапустить вопрос»
+// неоплаченного треда после пополнения баланса. Требует SessionAuth.
+// 200 в обоих исходах — status=processing (оплачено с баланса, ответ
+// придёт по WS) либо status=awaiting_payment (баланса всё ещё нет).
+func resumeThreadHandler(svc *thread.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sess := sessionFromGin(c)
+		t, err := svc.Resume(c.Request.Context(), c.Param("id"), sess.ID, sess.Language)
+		if err != nil {
+			writeThreadError(c, err)
+			return
+		}
+
+		msgs, err := loadMessagesOrFail(c, svc, t.ID, sess.ID)
+		if err != nil {
+			return
+		}
+		c.JSON(http.StatusOK, newThreadDetailResponse(t, msgs))
+	}
+}
+
 // cancelThreadHandler — POST /threads/{id}/cancel. Требует SessionAuth.
 func cancelThreadHandler(svc *thread.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -360,22 +400,10 @@ func writeThreadError(c *gin.Context, err error) {
 		writeError(c, invalidRequestError("This input_type is not supported yet"))
 	case errors.Is(err, thread.ErrInvalidStatusFilter):
 		writeError(c, invalidRequestError("Invalid status filter"))
-	case errors.Is(err, thread.ErrThreadClosed):
-		writeError(c, &apierror.Error{
-			Code:       "thread_closed",
-			Message:    "Обращение закрыто. Задайте вопрос в новом обращении",
-			HTTPStatus: http.StatusConflict,
-		})
 	case errors.Is(err, thread.ErrThreadNotActive):
 		writeError(c, &apierror.Error{
 			Code:       "thread_not_active",
 			Message:    "Обращение уже завершено. Задайте вопрос в новом обращении",
-			HTTPStatus: http.StatusConflict,
-		})
-	case errors.Is(err, thread.ErrPaymentRequired):
-		writeError(c, &apierror.Error{
-			Code:       "payment_required",
-			Message:    "Для продолжения нужно оплатить обращение",
 			HTTPStatus: http.StatusConflict,
 		})
 	case errors.Is(err, thread.ErrThreadBusy):

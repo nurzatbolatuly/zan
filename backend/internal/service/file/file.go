@@ -24,9 +24,6 @@ var (
 	// существование чужого id, BACKEND_CODING_STANDARDS.md).
 	ErrNotFound = errors.New("file: not found")
 
-	// ErrUnsupportedMimeType — zan-backend-tz-v3.md §5.3.
-	ErrUnsupportedMimeType = errors.New("file: unsupported mime type")
-
 	// ErrTooLarge — zan-backend-tz-v3.md §5.3.
 	ErrTooLarge = errors.New("file: too large")
 
@@ -35,17 +32,24 @@ var (
 	ErrRejectedByAVScanner = errors.New("file: rejected by antivirus scan")
 )
 
-// AllowedMimeTypes — зафиксировано на Stage 4 (BACKEND_PLAN.md §6 п.13):
-// ровно то, что нужно для анализа документов в MVP (zan-backend-tz-v3.md
-// §5.3) — значение маппится на расширение object key, не расширение из
-// имени файла (original_name — произвольная строка от клиента, доверять её
-// расширению для маршрутизации Extract нельзя).
-var AllowedMimeTypes = map[string]string{
-	"application/pdf": "pdf",
-	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-	"image/png":  "png",
-	"image/jpeg": "jpg",
+// extractableMimeTypes — типы, из которых helper/ умеет извлекать текст
+// (зеркало SUPPORTED_MIME_TYPES в helper/app/services/extraction_service.py).
+// Загрузить можно файл любого типа — ограничен только размер; остальные
+// типы сохраняются без вызова Extract (processing_status=error, агент видит
+// «файл не удалось прочитать»). Отправлять их в helper/ нельзя: отказ
+// INVALID_ARGUMENT засчитывается circuit breaker'ом gRPC-клиента как сбой,
+// и серия таких загрузок открыла бы его для всех — вместе с голосом и
+// рендером документов.
+var extractableMimeTypes = map[string]bool{
+	"application/pdf": true,
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": true,
+	"image/png":  true,
+	"image/jpeg": true,
 }
+
+// fallbackMimeType — Content-Type части multipart, который браузер не смог
+// определить (пустой заголовок у файла без известного расширения).
+const fallbackMimeType = "application/octet-stream"
 
 // internalPresignTTL — время жизни presigned-ссылки, которую видит только
 // helper/ (синхронный вызов в пределах одного HTTP-запроса, секунд более
@@ -74,7 +78,7 @@ type Repository interface {
 	// AttachToMessage — проставляет message_id уже провалидированным
 	// (ValidateAvailable) набору id. Отдельный шаг, не общая транзакция с
 	// созданием сообщения — тот же принятый компромисс, что
-	// billing.ConfirmPayment -> thread.ActivateAfterPayment (Stage 3):
+	// billing.ConfirmPayment -> thread.Service.Resume (Stage 3):
 	// изолированный неуспех здесь не должен откатывать уже созданное
 	// сообщение.
 	AttachToMessage(ctx context.Context, messageID string, ids []string) error
@@ -97,12 +101,20 @@ type Extractor interface {
 // AVScanner — антивирусная проверка загруженного файла
 // (zan-backend-tz-v3.md §5.3). Порт объявлен как Strategy, тот же приём,
 // что SttProvider на стороне Python — composition root (cmd/api/main.go)
-// подключает internal/platform/clamav.Scanner (Stage 8, clamd поверх
-// TCP), сам Service от конкретной реализации не зависит.
+// выбирает реализацию, сам Service от конкретной реализации не зависит.
 type AVScanner interface {
 	// Scan возвращает ErrRejectedByAVScanner, если данные признаны опасными.
 	Scan(ctx context.Context, data []byte) error
 }
+
+// NoopAVScanner — Null Object для AVScanner: пропускает любой файл.
+// Подключён в cmd/api/main.go, пока в стеке нет реального антивируса —
+// порт сохранён, чтобы подключение сканера не требовало правок
+// Service/HTTP-слоя/контракта API.
+type NoopAVScanner struct{}
+
+// Scan всегда признаёт данные безопасными.
+func (NoopAVScanner) Scan(context.Context, []byte) error { return nil }
 
 // Service — бизнес-логика файлов.
 type Service struct {
@@ -141,16 +153,12 @@ type UploadRequest struct {
 // (BACKEND_PLAN.md Stage 4 DoD: "реальный PDF/DOCX -> извлечённый текст...
 // через Go-оркестрацию и gRPC-вызовы, на одном запросе"). Неудача Extract —
 // не фатальна для аплоада (zan-backend-tz-v3.md §5.3: "файл всё равно
-// сохраняется, processing_status=error"), фатальны только MIME/размер/AV.
+// сохраняется, processing_status=error"), фатальны только размер/AV.
 // Возвращает вместе с записью свежую presigned-ссылку на скачивание
 // (zan-backend-tz-v2.md §3.3: "{file_id, url}").
 func (s *Service) Upload(ctx context.Context, req UploadRequest) (domain.FileAttachment, string, error) {
 	l := logger.FromContext(ctx)
 
-	ext, ok := AllowedMimeTypes[req.MimeType]
-	if !ok {
-		return domain.FileAttachment{}, "", fmt.Errorf("%w: %q", ErrUnsupportedMimeType, req.MimeType)
-	}
 	if int64(len(req.Data)) > s.maxSizeBytes {
 		return domain.FileAttachment{}, "", fmt.Errorf("%w: %d bytes (max %d)", ErrTooLarge, len(req.Data), s.maxSizeBytes)
 	}
@@ -163,9 +171,16 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (domain.FileAtt
 		return domain.FileAttachment{}, "", ErrRejectedByAVScanner
 	}
 
+	mimeType := req.MimeType
+	if mimeType == "" {
+		mimeType = fallbackMimeType
+	}
+
+	// Без расширения в ключе: original_name — произвольная строка от клиента,
+	// тип объекта задаёт Content-Type, а не суффикс ключа.
 	id := s.idgen.NewID()
-	key := fmt.Sprintf("uploads/%s/%s.%s", req.SessionID, id, ext)
-	if err := s.storage.Put(ctx, key, bytes.NewReader(req.Data), int64(len(req.Data)), req.MimeType); err != nil {
+	key := fmt.Sprintf("uploads/%s/%s", req.SessionID, id)
+	if err := s.storage.Put(ctx, key, bytes.NewReader(req.Data), int64(len(req.Data)), mimeType); err != nil {
 		return domain.FileAttachment{}, "", fmt.Errorf("file: upload: put object: %w", err)
 	}
 
@@ -174,7 +189,7 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (domain.FileAtt
 		SessionID:        req.SessionID,
 		ObjectKey:        key,
 		OriginalName:     req.OriginalName,
-		MimeType:         req.MimeType,
+		MimeType:         mimeType,
 		SizeBytes:        int64(len(req.Data)),
 		Purpose:          domain.FilePurposeAnalysisInput,
 		ProcessingStatus: domain.FileProcessingStatusPending,
@@ -186,7 +201,7 @@ func (s *Service) Upload(ctx context.Context, req UploadRequest) (domain.FileAtt
 	l.Info("file_uploaded", slog.Group("context",
 		slog.String("file_id", created.ID),
 		slog.String("session_id", req.SessionID),
-		slog.String("mime_type", req.MimeType),
+		slog.String("mime_type", mimeType),
 		slog.Int64("size_bytes", created.SizeBytes),
 	))
 
@@ -219,6 +234,10 @@ func (s *Service) extract(ctx context.Context, l *slog.Logger, f domain.FileAtta
 		}
 		f.ProcessingStatus = domain.FileProcessingStatusError
 		return f
+	}
+
+	if !extractableMimeTypes[f.MimeType] {
+		return fail(fmt.Sprintf("mime type %q is not extractable", f.MimeType))
 	}
 
 	fileURL, err := s.storage.PresignGetInternal(ctx, f.ObjectKey, internalPresignTTL)

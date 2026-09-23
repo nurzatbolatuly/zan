@@ -132,6 +132,25 @@ func (c *Client) PutBytes(ctx context.Context, key string, data []byte, contentT
 	return c.Put(ctx, key, bytes.NewReader(data), int64(len(data)), contentType)
 }
 
+// Get читает объект целиком в память — вложение для передачи в LLM
+// (internal/agent, base64 в теле запроса); размер ограничен
+// FILE_MAX_SIZE_BYTES ещё на загрузке.
+func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
+	out, err := c.api.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("storage: get %q: %w", key, err)
+	}
+	defer func() { _ = out.Body.Close() }()
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, fmt.Errorf("storage: get %q: read body: %w", key, err)
+	}
+	return data, nil
+}
+
 // PresignGetPublic — ссылка для стороны снаружи docker-сети (ответ клиенту
 // на POST /files/upload и GET /files/{id}).
 func (c *Client) PresignGetPublic(ctx context.Context, key string, expiry time.Duration) (string, error) {

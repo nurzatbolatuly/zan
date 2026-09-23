@@ -1,28 +1,40 @@
 import { useEffect, useRef } from "react";
 import { UserMessageBubble } from "./UserMessageBubble";
 import { AssistantMessageBubble } from "./AssistantMessageBubble";
-import { TypingIndicator } from "./TypingIndicator";
-import type { ChatMessage, MessageVote } from "../types";
+import { StreamingAssistantBubble } from "./StreamingAssistantBubble";
+import { ReplyProgressIndicator } from "./ReplyProgressIndicator";
+import { cn } from "@/shared/lib/cn";
+import { CHAT_COLUMN_CLASS } from "../layout";
+import type { ChatMessage } from "../types";
+import type { ReplyProgressStep } from "../replyProgress";
+import type { MessageFeedbackValue } from "@/shared/types/api";
 import type { ChatDictionary } from "../locales";
 
 interface ThreadMessagesProps {
   messages: ChatMessage[];
-  isAssistantTyping: boolean;
+  /** Этап ожидания ответа до первого токена стрима; null — ответ не ожидается. */
+  replyProgress: ReplyProgressStep | null;
+  /** Накопленный текст текущего стрима (WS answer_delta); null — ничего не льётся. */
+  streamingText: string | null;
+  streamingMessageId: string | null;
   expandedSourceMessageIds: ReadonlySet<string>;
   onToggleSources: (messageId: string) => void;
-  onVote: (messageId: string, vote: NonNullable<MessageVote>) => void;
+  onVote: (messageId: string, vote: MessageFeedbackValue) => void;
   t: ChatDictionary;
 }
 
 export function ThreadMessages({
   messages,
-  isAssistantTyping,
+  replyProgress,
+  streamingText,
+  streamingMessageId,
   expandedSourceMessageIds,
   onToggleSources,
   onVote,
   t,
 }: ThreadMessagesProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const isAwaitingReply = replyProgress !== null;
 
   useEffect(() => {
     // `scrollIntoView({ behavior: "smooth" })` — нативный скролл браузера, глобальный CSS-фолбэк
@@ -35,12 +47,13 @@ export function ThreadMessages({
       behavior: prefersReducedMotion ? "auto" : "smooth",
       block: "end",
     });
-  }, [messages.length, isAssistantTyping]);
+    // streamingText?.length — держит автоскролл внизу, пока текст растёт токен за токеном, не только на новое сообщение.
+  }, [messages.length, isAwaitingReply, streamingText?.length]);
 
   return (
-    <div className="flex max-w-[760px] flex-col gap-5 pb-6 pt-4">
+    <div className={cn(CHAT_COLUMN_CLASS, "flex flex-col gap-5 pb-6 pt-4")}>
       {messages.map((message) =>
-        message.role === "user" ? (
+        message.sender === "user" ? (
           <UserMessageBubble key={message.id} message={message} />
         ) : (
           <AssistantMessageBubble
@@ -53,7 +66,15 @@ export function ThreadMessages({
           />
         ),
       )}
-      {isAssistantTyping && <TypingIndicator label={t.assistantTypingLabel} />}
+      {streamingText !== null ? (
+        <StreamingAssistantBubble
+          key={streamingMessageId ?? "streaming"}
+          text={streamingText}
+          t={t}
+        />
+      ) : (
+        isAwaitingReply && <ReplyProgressIndicator step={replyProgress} t={t} />
+      )}
       <div ref={bottomRef} />
     </div>
   );

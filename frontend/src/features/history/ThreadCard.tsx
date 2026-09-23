@@ -1,7 +1,7 @@
 import { Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge, Card, IconButton } from "@/shared/ui";
-import { formatDate, formatDuration } from "@/shared/lib/format";
+import { formatDate } from "@/shared/lib/format";
 import { THREAD_STATUS_TONE } from "@/shared/lib/threadStatusTone";
 import type { Thread } from "./types";
 import { historyDictionary } from "./locales";
@@ -30,7 +30,7 @@ export function ThreadCard({ thread, lang, onDelete }: ThreadCardProps) {
             {dictionary.statusLabel[thread.status]}
           </Badge>
           <span>{formatDate(thread.updatedAt)}</span>
-          <span>{formatDuration(thread.processingTimeSeconds, lang)}</span>
+          <span>{dictionary.messagesCountLabel(thread.messageCount)}</span>
         </div>
       </Link>
       {/* Внутри карточки, правый верхний угол — без рамки (variant="ghost-danger"),

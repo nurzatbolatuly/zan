@@ -9,16 +9,16 @@ def test_log_record_matches_contract(capsys: pytest.CaptureFixture[str]) -> None
     configure_logging("debug")
     logger = get_logger()
 
-    logger.info("rag_search_completed", context={"matches_count": 3})
+    logger.info("file_extract_completed", context={"extracted_chars": 1024})
 
     out = capsys.readouterr().out.strip()
     record = json.loads(out)
 
     assert record["service"] == "python-agent"
     assert record["level"] == "INFO"
-    assert record["message"] == "rag_search_completed"
+    assert record["message"] == "file_extract_completed"
     assert "timestamp" in record
-    assert record["context"] == {"matches_count": 3}
+    assert record["context"] == {"extracted_chars": 1024}
 
 
 def test_warning_level_is_warn_not_warning(capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,32 +1,45 @@
 import type { Lang } from "@/shared/types/common";
+import type { ReplyProgressStep } from "./replyProgress";
 
 /**
  * UI-строки экрана «Чат» (не сам демо-контент диалога — тот в mocks.ts).
  * Форма Record<Lang, ChatDictionary>, как договорено в instructions.md
  * («Конвенции» → i18n) — используется напрямую как `chatDictionary[lang]`.
  */
+export interface QuickTopic {
+  label: string;
+  draft: string;
+}
+
 export interface ChatDictionary {
   emptyTitle: string;
   emptySubtitle: string;
   quickTopicsLabel: string;
+  quickTopics: QuickTopic[];
   composerPlaceholder: string;
   attachLabel: string;
   removeAttachmentLabel: string;
+  fileTooLarge: (maxSizeLabel: string) => string;
   voiceStartLabel: string;
   voiceStopLabel: string;
   recordingHint: string;
   sendLabel: string;
   footerDisclaimer: string;
   assistantLabel: string;
-  assistantTypingLabel: string;
+  replyProgress: Record<ReplyProgressStep, string>;
   sourcesToggle: (count: number) => string;
   helpful: string;
   notHelpful: string;
-  freeFollowup: string;
-  downloadPdf: string;
-  downloadDocx: string;
-  editDocument: string;
-  documentActionUnavailable: string;
+  /** Тред `awaiting_payment`: вопрос сохранён, но не оплачен. */
+  awaitingPaymentNotice: string;
+  resumeQuestionAction: string;
+  topUpBalanceAction: string;
+  loadError: string;
+  retry: string;
+  /** Тред оплачен, но ответа нет — вызов LLM упал (internal_error,
+   * кредит уже возвращён), показать это явно, а не молчать. */
+  threadErrorNotice: string;
+  threadCanceledNotice: string;
   onboardingTitle: string;
   onboardingSubtitle: string;
   onboardingSteps: string[];
@@ -34,8 +47,6 @@ export interface ChatDictionary {
   onboardingCta: string;
   payTitleConsultation: string;
   payDescriptionConsultation: string;
-  payTitleDocument: string;
-  payDescriptionDocument: string;
   payAmountField: string;
   payConfirm: string;
   payCancel: string;
@@ -48,40 +59,67 @@ export const chatDictionary: Record<Lang, ChatDictionary> = {
     emptySubtitle:
       "Отвечаем простым языком и показываем, на каких статьях основан ответ.",
     quickTopicsLabel: "Быстрый старт",
-    composerPlaceholder: "Опишите ситуацию своими словами…",
+    quickTopics: [
+      {
+        label: "Трудовой спор",
+        draft: "Работодатель не выплатил зарплату вовремя. Что мне делать?",
+      },
+      {
+        label: "Аренда жилья",
+        draft: "Хочу проверить договор аренды квартиры перед подписанием.",
+      },
+      {
+        label: "Возврат товара",
+        draft: "Продавец отказывается принимать возврат бракованного товара.",
+      },
+      {
+        label: "Штраф ГИБДД",
+        draft: "Пришёл штраф за нарушение ПДД, с которым я не согласен.",
+      },
+    ],
+    composerPlaceholder: "Опишите ситуацию…",
     attachLabel: "Прикрепить файл",
     removeAttachmentLabel: "Убрать вложение",
+    fileTooLarge: (maxSizeLabel) => `Файл слишком большой — максимум ${maxSizeLabel}.`,
     voiceStartLabel: "Голосовой ввод",
     voiceStopLabel: "Готово",
     recordingHint: "Говорите — текст появится в поле ввода",
     sendLabel: "Отправить сообщение",
     footerDisclaimer: "Zan даёт справочную информацию и не заменяет юриста.",
     assistantLabel: "ZAN · ОТВЕТ",
-    assistantTypingLabel: "ZAN печатает…",
+    replyProgress: {
+      sending: "Отправляем ваш вопрос…",
+      readingFile: "Читаем приложенный документ…",
+      analyzing: "Разбираемся в вашей ситуации…",
+      checkingLaw: "Сверяемся с законодательством РК…",
+      composing: "Готовим ответ…",
+      takingLonger: "Вопрос непростой — нужно ещё немного времени…",
+    },
     sourcesToggle: (count) => `Показать статьи закона (${count})`,
     helpful: "Полезно",
     notHelpful: "Не помогло",
-    freeFollowup: "Уточнения — бесплатно",
-    downloadPdf: "Скачать PDF",
-    downloadDocx: "Скачать Word",
-    editDocument: "Исправить",
-    documentActionUnavailable: "Пока недоступно",
+    awaitingPaymentNotice:
+      "Обращение ожидает оплаты. Пополните баланс в «Тарифах», затем перезапустите вопрос или задайте новый.",
+    resumeQuestionAction: "Перезапустить вопрос",
+    topUpBalanceAction: "Пополнить баланс",
+    loadError: "Не удалось загрузить обращение.",
+    retry: "Повторить",
+    threadErrorNotice:
+      "Не удалось обработать обращение — оплата возвращена на баланс. Начните новый тред.",
+    threadCanceledNotice: "Обращение отменено.",
     onboardingTitle: "Понятные ответы по законам Казахстана",
     onboardingSubtitle:
       "Опишите ситуацию обычными словами — получите ответ и ссылки на статьи закона.",
     onboardingSteps: [
       "Опишите ситуацию своими словами — текстом, голосом или приложите документ.",
-      "Оплата списывается один раз за обращение. Уточнять внутри него можно сколько угодно.",
+      "Один вопрос — одна консультация: каждый вопрос оплачивается отдельно.",
       "Получите ответ со ссылками на статьи закона, при необходимости — готовый документ.",
     ],
     onboardingDisclaimer:
       "Zan — справочный сервис. Ответы основаны на действующем законодательстве РК, но не являются юридической консультацией и не заменяют обращение к адвокату по сложным делам.",
     onboardingCta: "Понятно, начать",
     payTitleConsultation: "Оплата консультации",
-    payDescriptionConsultation:
-      "Спишем один раз за это обращение. Уточнения внутри него — бесплатно.",
-    payTitleDocument: "Оплата документа",
-    payDescriptionDocument: "Спишем один раз за подготовку документа по этому обращению.",
+    payDescriptionConsultation: "Спишем одну консультацию за этот вопрос.",
     payAmountField: "К оплате",
     payConfirm: "Оплатить картой",
     payCancel: "Отмена",
@@ -92,40 +130,67 @@ export const chatDictionary: Record<Lang, ChatDictionary> = {
     emptySubtitle:
       "Қарапайым тілмен жауап береміз және негіз болған баптарды көрсетеміз.",
     quickTopicsLabel: "Жылдам бастау",
+    quickTopics: [
+      {
+        label: "Еңбек дауы",
+        draft: "Жұмыс беруші жалақыны уақытында төлемей отыр. Не істеуім керек?",
+      },
+      {
+        label: "Тұрғын үй жалдау",
+        draft: "Пәтер жалдау шартын қол қоюдан бұрын тексергім келеді.",
+      },
+      {
+        label: "Тауарды қайтару",
+        draft: "Сатушы ақаулы тауарды қайтарып алудан бас тартып отыр.",
+      },
+      {
+        label: "ЖКО айыппұлы",
+        draft: "Жол қозғалысы ережесін бұзғаны үшін келіспейтін айыппұл келді.",
+      },
+    ],
     composerPlaceholder: "Жағдайды өз сөзіңізбен жазыңыз…",
     attachLabel: "Файл тіркеу",
     removeAttachmentLabel: "Тіркемені алып тастау",
+    fileTooLarge: (maxSizeLabel) => `Файл тым үлкен — ең көбі ${maxSizeLabel}.`,
     voiceStartLabel: "Дауыстық енгізу",
     voiceStopLabel: "Дайын",
     recordingHint: "Сөйлеңіз — мәтін енгізу жолында пайда болады",
     sendLabel: "Хабарламаны жіберу",
     footerDisclaimer: "Zan анықтамалық ақпарат береді және заңгерді алмастырмайды.",
     assistantLabel: "ZAN · ЖАУАП",
-    assistantTypingLabel: "ZAN жазып жатыр…",
+    replyProgress: {
+      sending: "Сұрағыңызды жіберіп жатырмыз…",
+      readingFile: "Тіркелген құжатты оқып жатырмыз…",
+      analyzing: "Жағдайыңызды талдап жатырмыз…",
+      checkingLaw: "ҚР заңнамасымен салыстырып жатырмыз…",
+      composing: "Жауап дайындап жатырмыз…",
+      takingLonger: "Сұрақ күрделі — тағы біраз уақыт қажет…",
+    },
     sourcesToggle: (count) => `Заң баптарын көрсету (${count})`,
     helpful: "Пайдалы",
     notHelpful: "Көмектеспеді",
-    freeFollowup: "Нақтылау — тегін",
-    downloadPdf: "PDF жүктеу",
-    downloadDocx: "Word жүктеу",
-    editDocument: "Түзету",
-    documentActionUnavailable: "Әзірге қолжетімсіз",
+    awaitingPaymentNotice:
+      "Өтініш төлемді күтуде. «Тарифтер» бөлімінде балансты толтырып, сұрақты қайта іске қосыңыз немесе жаңа сұрақ қойыңыз.",
+    resumeQuestionAction: "Сұрақты қайта іске қосу",
+    topUpBalanceAction: "Балансты толтыру",
+    loadError: "Өтінімді жүктеу мүмкін болмады.",
+    retry: "Қайталау",
+    threadErrorNotice:
+      "Өтінімді өңдеу сәтсіз аяқталды — төлем балансқа қайтарылды. Жаңа тред бастаңыз.",
+    threadCanceledNotice: "Өтінім тоқтатылды.",
     onboardingTitle: "Қазақстан заңдары бойынша түсінікті жауаптар",
     onboardingSubtitle:
       "Жағдайды қарапайым сөзбен жазыңыз — жауап пен заң баптарына сілтеме аласыз.",
     onboardingSteps: [
       "Жағдайды өз сөзіңізбен жазыңыз — мәтінмен, дауыспен немесе құжат тіркеңіз.",
-      "Төлем бір өтініш үшін бір рет алынады. Оның ішінде қалағаныңызша нақтылаңыз.",
+      "Бір сұрақ — бір кеңес: әр сұрақ бөлек төленеді.",
       "Заң баптарына сілтемесі бар жауап, қажет болса — дайын құжат аласыз.",
     ],
     onboardingDisclaimer:
       "Zan — анықтамалық қызмет. Жауаптар ҚР қолданыстағы заңнамасына негізделген, бірақ заң кеңесі болып саналмайды және күрделі істерде адвокатқа жүгінуді алмастырмайды.",
     onboardingCta: "Түсінікті, бастау",
     payTitleConsultation: "Кеңес ақысын төлеу",
-    payDescriptionConsultation:
-      "Осы өтініш үшін бір рет алынады. Ішіндегі нақтылаулар — тегін.",
-    payTitleDocument: "Құжат ақысын төлеу",
-    payDescriptionDocument: "Осы өтініш бойынша құжат дайындау үшін бір рет алынады.",
+    payDescriptionConsultation: "Осы сұрақ үшін бір кеңес алынады.",
     payAmountField: "Төленетін сома",
     payConfirm: "Картамен төлеу",
     payCancel: "Болдырмау",

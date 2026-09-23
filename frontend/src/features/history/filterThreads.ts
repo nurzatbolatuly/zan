@@ -1,13 +1,4 @@
-import type { HistoryPeriodFilter, HistoryStatusFilter, Thread } from "./types";
-
-interface FilterParams {
-  threads: Thread[];
-  search: string;
-  status: HistoryStatusFilter;
-  period?: HistoryPeriodFilter;
-  /** Точка отсчёта для period-фильтра — параметр ради детерминированных тестов, не `new Date()` внутри. */
-  now?: Date;
-}
+import type { HistoryPeriodFilter, Thread } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,25 +28,19 @@ function matchesPeriod(
 }
 
 /**
- * Чистая функция — вынесена из хука, чтобы тестировать бизнес-логику
- * фильтра отдельно от React (FRONT_CODING_STANDARDS.md §10).
+ * Stage 6: `status`/`search` ушли на бэк как query-параметры `GET /threads`
+ * (см. `useThreadHistory.ts`) — здесь остался только период, у него нет
+ * серверного эквивалента (openapi.yaml поддерживает только `status`/
+ * `search`/`page`). Фильтрует то, что уже загружено на экран (текущую
+ * страницу), не весь список тредов сессии — задокументированное
+ * ограничение, см. instructions.md, расхождение №6 плана интеграции.
+ * Чистая функция — тестируется отдельно от React (FRONT_CODING_STANDARDS.md §10).
  */
-export function filterThreads({
-  threads,
-  search,
-  status,
-  period = "all",
-  now = new Date(),
-}: FilterParams): Thread[] {
-  const query = search.trim().toLowerCase();
-
-  return threads.filter((thread) => {
-    if (status !== "all" && thread.status !== status) return false;
-    if (!matchesPeriod(thread.updatedAt, period, now)) return false;
-    if (!query) return true;
-    return (
-      thread.title.toLowerCase().includes(query) ||
-      thread.preview.toLowerCase().includes(query)
-    );
-  });
+export function filterByPeriod(
+  threads: Thread[],
+  period: HistoryPeriodFilter,
+  now: Date = new Date(),
+): Thread[] {
+  if (period === "all") return threads;
+  return threads.filter((thread) => matchesPeriod(thread.updatedAt, period, now));
 }

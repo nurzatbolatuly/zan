@@ -8,13 +8,13 @@ import type { BadgeProps } from "@/shared/ui";
  * той же раскраски статусов — для полос "по статусам" (FRONT_CODING_STANDARDS.md §5,
  * "переезжает в shared, когда нужен второй фиче").
  *
- * Тонов у Badge всего 4 (accent/warn/danger/muted) на 6 статусов — совпадает
- * с прототипом, не ошибка маппинга.
+ * Тонов у Badge всего 4 (accent/warn/danger/muted) на 5 статусов.
+ * `awaiting_payment` — warn: единственный статус, где от пользователя ждут
+ * действия (пополнить баланс и перезапустить вопрос).
  */
 export const THREAD_STATUS_TONE: Record<ThreadStatus, NonNullable<BadgeProps["tone"]>> = {
-  queued: "muted",
+  awaiting_payment: "warn",
   processing: "accent",
-  clarify: "warn",
   done: "accent",
   error: "danger",
   canceled: "muted",

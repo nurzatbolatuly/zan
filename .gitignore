@@ -1,6 +1,11 @@
-# Монорепо-уровень (frontend/, backend/, helper/ держат свои .gitignore для зависимостей/сборки)
 .DS_Store
 *.local
 
-# docker-compose.yml читает .env из корня — не коммитится (BACKEND_PLAN.md §8, .env.example — шаблон)
 .env
+
+# Env-файлы с реальными значениями не коммитятся — только .env.example
+.env.*
+!.env.example
+
+# Документация проекта — только локально
+instructions.md

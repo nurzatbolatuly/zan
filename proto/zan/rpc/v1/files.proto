@@ -12,8 +12,8 @@ service FilesService {
 }
 
 // ExtractRequest — file_url, не байты (BACKEND_PLAN.md §3.1: payload
-// остаётся маленьким, лимит unary-сообщения gRPC не бьёт даже на файле в
-// 20 МБ). file_url — presigned GET-ссылка на собственный MinIO/S3
+// остаётся маленьким, лимит unary-сообщения gRPC не бьёт при любом размере
+// файла). file_url — presigned GET-ссылка на собственный MinIO/S3
 // backend'а, короткого времени жизни (internal/grpcclient генерирует её
 // непосредственно перед вызовом) — Python обязан проверить, что host
 // ссылки совпадает с его собственным сконфигурированным storage-эндпоинтом,

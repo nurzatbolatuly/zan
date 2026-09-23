@@ -1,14 +1,43 @@
-import { Card, Button, Textarea } from "@/shared/ui";
+import { Card, Button, EmptyState, Skeleton, Textarea } from "@/shared/ui";
 import { useLangStore } from "@/shared/stores/useLangStore";
 import { settingsDictionary } from "../locales";
 import { usePromptsForm } from "../usePromptsForm";
 
-/** Settings → Промпты (PLAN.md §5 Stage 4a). */
+/** Settings → Промпты (PLAN.md §5 Stage 4a, Stage 6 — реальный `AgentPrompt` CRUD). */
 export function PromptsTab() {
   const lang = useLangStore((state) => state.lang);
   const t = settingsDictionary[lang];
-  const { prompts, register, errors, isDirty, isSubmitting, submitForm } =
-    usePromptsForm();
+  const {
+    prompts,
+    isLoading,
+    isError,
+    retry,
+    register,
+    errors,
+    isDirty,
+    isSubmitting,
+    submitForm,
+  } = usePromptsForm();
+
+  if (isError) {
+    return (
+      <Card>
+        <EmptyState
+          title={t.common.loadError}
+          action={<Button onClick={retry}>{t.common.retry}</Button>}
+        />
+      </Card>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <Card>
+        <Skeleton className="mb-4 h-36" />
+        <Skeleton className="h-36" />
+      </Card>
+    );
+  }
 
   return (
     <Card>

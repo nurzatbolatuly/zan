@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeBundlePrice } from "./tariffPricing";
-import type { PriceTable } from "@/shared/types/tariff";
+import type { PriceTable, ServiceId } from "@/shared/types/tariff";
 
 const PRICES: PriceTable = { qa: 2900, doc: 4900 };
 
@@ -45,9 +45,9 @@ describe("computeBundlePrice", () => {
     });
   });
 
-  it("treats a service missing from the price table as 0, not NaN", () => {
+  it("treats a service missing from the price table as 0, not NaN (defensive — real backend JSON, not guaranteed by the closed type at runtime)", () => {
     const price = computeBundlePrice(
-      { discountPercent: 0, items: [{ serviceId: "unknown", qty: 5 }] },
+      { discountPercent: 0, items: [{ serviceId: "unknown" as ServiceId, qty: 5 }] },
       PRICES,
     );
     expect(price).toEqual({ subtotalTenge: 0, totalTenge: 0, hasDiscount: false });

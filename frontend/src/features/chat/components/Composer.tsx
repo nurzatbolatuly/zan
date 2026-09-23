@@ -2,8 +2,10 @@ import { useRef } from "react";
 import type { ChangeEvent, KeyboardEvent } from "react";
 import { Mic, Paperclip, Send } from "lucide-react";
 import { IconButton } from "@/shared/ui/IconButton";
+import { cn } from "@/shared/lib/cn";
 import { useAutoResizeTextarea } from "../useAutoResizeTextarea";
 import { AttachmentChip } from "./AttachmentChip";
+import { CHAT_COLUMN_CLASS } from "../layout";
 import type { ChatAttachment } from "../types";
 import type { ChatDictionary } from "../locales";
 
@@ -57,7 +59,7 @@ export function Composer({
 
   return (
     <div className="safe-area-bottom fixed inset-x-0 bottom-[var(--mobile-nav-h)] z-composer bg-gradient-to-t from-bg to-transparent px-4 pb-4 pt-8 md:bottom-0">
-      <div className="mx-auto flex max-w-[760px] flex-col gap-2">
+      <div className={cn(CHAT_COLUMN_CLASS, "flex flex-col gap-2")}>
         {isRecording && (
           <div className="flex h-11 items-center gap-2.5 rounded-xl border border-accent bg-surface px-3.5">
             <span
@@ -77,7 +79,9 @@ export function Composer({
 
         {attachment && (
           <AttachmentChip
-            attachment={attachment}
+            name={attachment.name}
+            mimeType={attachment.mimeType}
+            sizeBytes={attachment.sizeBytes}
             onRemove={onRemoveAttachment}
             removeLabel={t.removeAttachmentLabel}
           />
@@ -98,7 +102,6 @@ export function Composer({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.doc,.docx,image/*"
             className="hidden"
             onChange={handleFileChange}
           />

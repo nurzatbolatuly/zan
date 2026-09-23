@@ -15,7 +15,7 @@ package zan.rpc.v1;
 option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
 
 // TraceContext — сквозной идентификатор запроса, прикладывается ко всем
-// будущим RPC-запросам Go -> Python (RagService/FilesService/DocumentsService/
+// будущим RPC-запросам Go -> Python (FilesService/DocumentsService/
 // SttService, см. BACKEND_PLAN.md §3). trace_id совпадает с X-Trace-Id,
 // который фронт шлёт на Go (BACKEND_CODING_STANDARDS.md §4.3).
 //
@@ -33,8 +33,8 @@ message TraceContext {
 
 // Lang — предпочитаемый язык сессии (domain.Language в Go,
 // zan-backend-tz-v3.md §2.2), передаётся туда, где Python-стороне нужен
-// языковой контекст (SttService.Transcribe — Stage 4; RagService.Search —
-// Stage 5). Первый потребитель — stt.proto.
+// языковой контекст (SttService.Transcribe — Stage 4). Первый потребитель —
+// stt.proto.
 enum Lang {
   LANG_UNSPECIFIED = 0;
   LANG_RU = 1;

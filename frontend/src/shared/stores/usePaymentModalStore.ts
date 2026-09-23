@@ -1,5 +1,8 @@
 import { create } from "zustand";
 
+/** Шаг обработки оплаты, который модалка показывает пользователю, пока ждёт onConfirm. */
+export type PaymentStep = "checkout" | "confirm";
+
 interface PaymentOptions {
   title: string;
   description: string;
@@ -11,7 +14,13 @@ interface PaymentOptions {
   confirmLabel: string;
   cancelLabel: string;
   note: string;
-  onConfirm: () => void;
+  /** Шаги, которые пройдёт onConfirm, в порядке выполнения — модалка рисует их списком. */
+  steps: PaymentStep[];
+  /** Реальный сетевой вызов (checkout+confirm, Stage 6) — модалка ждёт
+   * промис, показывает прогресс по `steps` и закрывается только при успехе;
+   * ошибка остаётся видимой (модалка не закрывается), см. PaymentModal.tsx.
+   * `reportStep` — переключить подсвеченный шаг перед началом его выполнения. */
+  onConfirm: (reportStep: (step: PaymentStep) => void) => Promise<void>;
 }
 
 interface PaymentModalState extends PaymentOptions {
@@ -30,14 +39,18 @@ const DEFAULTS: PaymentOptions = {
   confirmLabel: "Оплатить картой",
   cancelLabel: "Отмена",
   note: "Демонстрационная оплата — деньги не списываются.",
-  onConfirm: () => {},
+  steps: ["checkout", "confirm"],
+  onConfirm: () => Promise.resolve(),
 };
 
 /**
  * Единственный экземпляр оплаты на всё приложение (M3 из PLAN.md §1) —
- * Chat и Tariffs зовут его отсюда, компонент-рендерер — PaymentModal
- * в shared/ui, смонтирован один раз в AppShell. Оплата — заглушка/mock
- * (brief §3.4/§5) — onConfirm просто выполняет то, что нужно вызывающей странице.
+ * Chat/Tariffs/History зовут его отсюда, компонент-рендерер — PaymentModal
+ * в shared/ui, смонтирован один раз в AppShell. `onConfirm` — реальный
+ * `POST /payments/checkout` + `.../confirm` (Stage 6); провайдер оплаты на
+ * бэке сам называется "mock" (openapi.yaml#Payment.provider) — карта
+ * реально не списывается, но запрос/начисление баланса настоящие, не
+ * фронтовая имитация.
  */
 export const usePaymentModalStore = create<PaymentModalState>((set) => ({
   ...DEFAULTS,

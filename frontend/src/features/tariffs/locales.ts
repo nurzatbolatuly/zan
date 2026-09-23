@@ -1,6 +1,6 @@
 import type { Lang } from "@/shared/types/common";
 import { formatTenge, pluralRu } from "@/shared/lib/format";
-import type { BuiltInServiceId } from "./types";
+import type { ServiceId } from "./types";
 
 const QA_FORMS_RU: readonly [string, string, string] = ["запрос", "запроса", "запросов"];
 const DOC_FORMS_RU: readonly [string, string, string] = [
@@ -10,7 +10,8 @@ const DOC_FORMS_RU: readonly [string, string, string] = [
 ];
 
 /**
- * UI-строки экрана «Тарифы» (не сами цены/состав пакетов — те в mocks.ts/types.ts).
+ * UI-строки экрана «Тарифы» (не сами цены/состав пакетов — те приходят с
+ * бэка, `GET /services`/`GET /tariffs`, Stage 6).
  * Форма Record<Lang, TariffsDictionary>, как договорено в instructions.md («Конвенции» → i18n).
  */
 export interface TariffsDictionary {
@@ -18,13 +19,17 @@ export interface TariffsDictionary {
   subtitle: string;
   buy: string;
   cancel: string;
-  serviceName: Record<BuiltInServiceId, string>;
+  serviceName: Record<ServiceId, string>;
   /** "3 запроса" / "1 документ" — казахский не склоняется (форма одна на любое количество). */
-  qtyLabel: (serviceId: BuiltInServiceId, qty: number) => string;
+  qtyLabel: (serviceId: ServiceId, qty: number) => string;
   /** "2 900 ₸ за 1 запрос" — цена за единицу для строки в своём наборе. */
-  unitPriceLabel: (serviceId: BuiltInServiceId, priceTenge: number) => string;
+  unitPriceLabel: (serviceId: ServiceId, priceTenge: number) => string;
   discountLabel: (percent: number) => string;
-  bundleName: Record<string, string>;
+  /** Тариф теперь настоящая сущность с бэка (`Tariff.name`, вводит админ в
+   * Settings→Tariffs) — до Stage 6 здесь был фиксированный demo-словарь по
+   * id (`b1`..`b4`), больше не нужен. */
+  loadError: string;
+  retry: string;
   customTitle: string;
   customSubtitle: string;
   customCta: string;
@@ -59,12 +64,8 @@ export const tariffsDictionary: Record<Lang, TariffsDictionary> = {
     unitPriceLabel: (serviceId, priceTenge) =>
       `${formatTenge(priceTenge)} за 1 ${serviceId === "qa" ? QA_FORMS_RU[0] : DOC_FORMS_RU[0]}`,
     discountLabel: (percent) => `−${percent}%`,
-    bundleName: {
-      b1: "1 вопрос",
-      b2: "Пакет вопросов",
-      b3: "Вопрос + документ",
-      b4: "Для бизнеса",
-    },
+    loadError: "Не удалось загрузить тарифы.",
+    retry: "Повторить",
     customTitle: "Свой набор запросов",
     customSubtitle: "Укажите нужное количество вопросов и документов вручную.",
     customCta: "Выбрать количество",
@@ -98,12 +99,8 @@ export const tariffsDictionary: Record<Lang, TariffsDictionary> = {
     unitPriceLabel: (serviceId, priceTenge) =>
       `1 ${serviceId === "qa" ? "сұраныс" : "құжат"} — ${formatTenge(priceTenge)}`,
     discountLabel: (percent) => `−${percent}%`,
-    bundleName: {
-      b1: "1 сұрақ",
-      b2: "Сұрақ пакеті",
-      b3: "Сұрақ + құжат",
-      b4: "Бизнес үшін",
-    },
+    loadError: "Тарифтерді жүктеу мүмкін болмады.",
+    retry: "Қайталау",
     customTitle: "Өз санын таңдау",
     customSubtitle: "Қажетті сұрақ пен құжат санын өзіңіз көрсетіңіз.",
     customCta: "Санын таңдау",

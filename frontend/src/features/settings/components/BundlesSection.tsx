@@ -23,6 +23,7 @@ interface BundlesSectionProps {
   services: Service[];
   bundleModal: BundleModalState;
   bundleModalKey: string;
+  isBundleModalPending: boolean;
   modalTitles: { create: string; edit: string };
   modalLabels: {
     fName: string;
@@ -53,6 +54,7 @@ export function BundlesSection({
   services,
   bundleModal,
   bundleModalKey,
+  isBundleModalPending,
   modalTitles,
   modalLabels,
   onOpenNew,
@@ -98,6 +100,7 @@ export function BundlesSection({
         services={services}
         initialBundle={bundleModal.mode === "edit" ? bundleModal.bundle : null}
         labels={modalLabels}
+        isPending={isBundleModalPending}
         onSave={onSave}
         onClose={onCloseModal}
       />

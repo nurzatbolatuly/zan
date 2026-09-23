@@ -28,9 +28,8 @@ type analyticsOverviewResponse struct {
 // те, что реально встретились (клиенту не нужно самому знать полный список
 // возможных ключей, чтобы нарисовать разбивку без "дыр").
 var allThreadStatuses = []domain.ThreadStatus{
-	domain.ThreadStatusQueued,
+	domain.ThreadStatusAwaitingPayment,
 	domain.ThreadStatusProcessing,
-	domain.ThreadStatusClarify,
 	domain.ThreadStatusDone,
 	domain.ThreadStatusError,
 	domain.ThreadStatusCanceled,

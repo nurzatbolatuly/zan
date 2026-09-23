@@ -34,8 +34,8 @@ const (
 
 // Lang — предпочитаемый язык сессии (domain.Language в Go,
 // zan-backend-tz-v3.md §2.2), передаётся туда, где Python-стороне нужен
-// языковой контекст (SttService.Transcribe — Stage 4; RagService.Search —
-// Stage 5). Первый потребитель — stt.proto.
+// языковой контекст (SttService.Transcribe — Stage 4). Первый потребитель —
+// stt.proto.
 type Lang int32
 
 const (
@@ -86,7 +86,7 @@ func (Lang) EnumDescriptor() ([]byte, []int) {
 }
 
 // TraceContext — сквозной идентификатор запроса, прикладывается ко всем
-// будущим RPC-запросам Go -> Python (RagService/FilesService/DocumentsService/
+// будущим RPC-запросам Go -> Python (FilesService/DocumentsService/
 // SttService, см. BACKEND_PLAN.md §3). trace_id совпадает с X-Trace-Id,
 // который фронт шлёт на Go (BACKEND_CODING_STANDARDS.md §4.3).
 //

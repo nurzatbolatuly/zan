@@ -38,7 +38,7 @@ func (s *fakeThreadStore) GetByID(_ context.Context, id string) (domain.Thread, 
 	return t, nil
 }
 
-func (s *fakeThreadStore) GetMessages(_ context.Context, threadID string) ([]domain.Message, error) {
+func (s *fakeThreadStore) GetConversation(_ context.Context, threadID string) ([]domain.Message, error) {
 	return append([]domain.Message(nil), s.messages[threadID]...), nil
 }
 
@@ -302,7 +302,7 @@ func TestGenerate_LLMFails_RefundsCreditAndSavesNoMessage(t *testing.T) {
 	require.Equal(t, 1, setup.balance.credits[testSessionID+"|doc"], "credit refunded")
 	require.Len(t, setup.balance.refunds, 1)
 	require.Equal(t, "doc", setup.balance.refunds[0].serviceID)
-	msgs, _ := setup.threads.GetMessages(context.Background(), testThreadID)
+	msgs, _ := setup.threads.GetConversation(context.Background(), testThreadID)
 	require.Empty(t, msgs)
 }
 
@@ -319,7 +319,7 @@ func TestGenerate_RenderFails_PreservesSavedMessageAndRefundsCredit(t *testing.T
 	require.Equal(t, 1, setup.balance.credits[testSessionID+"|doc"], "credit refunded even though message was saved")
 	require.Len(t, setup.balance.refunds, 1)
 
-	msgs, _ := setup.threads.GetMessages(context.Background(), testThreadID)
+	msgs, _ := setup.threads.GetConversation(context.Background(), testThreadID)
 	require.Len(t, msgs, 1, "message is preserved despite the render failure")
 
 	// PDF (первый в порядке рендера) успел сохраниться до сбоя DOCX — не откатывается.

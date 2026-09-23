@@ -118,12 +118,6 @@ func writeFileError(c *gin.Context, err error, maxSizeBytes int64) {
 	switch {
 	case errors.Is(err, file.ErrNotFound):
 		writeError(c, notFoundError("file_not_found", "Файл не найден"))
-	case errors.Is(err, file.ErrUnsupportedMimeType):
-		writeError(c, &apierror.Error{
-			Code:       "unsupported_file_type",
-			Message:    "Этот формат файла не поддерживается",
-			HTTPStatus: http.StatusUnsupportedMediaType,
-		})
 	case errors.Is(err, file.ErrTooLarge):
 		writeError(c, fileTooLargeError(maxSizeBytes))
 	case errors.Is(err, file.ErrRejectedByAVScanner):

@@ -25,7 +25,7 @@ const VARIANTS: Record<ButtonVariant, string> = {
 // FRONT_DESIGN_SYSTEM.md §9 — минимум 44px для ЛЮБОГО интерактивного элемента,
 // без исключения для "компактных" кнопок. `sm` отличается от `md` только
 // паддингом/размером текста, высота у обоих одна — h-11 (Stage 5 аудит: до
-// этой правки `sm` был h-9/36px, ниже минимума — see DocumentCard/BundlesSection).
+// этой правки `sm` был h-9/36px, ниже минимума — see BundlesSection).
 const SIZES: Record<ButtonSize, string> = {
   md: "h-11 px-4 text-body-sm",
   sm: "h-11 px-3 text-caption",

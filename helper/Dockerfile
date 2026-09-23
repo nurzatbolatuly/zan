@@ -41,20 +41,13 @@ RUN useradd --create-home --uid 10001 helper
 USER 10001
 
 # WHISPER_MODEL_SIZE — должен совпадать с рантайм-ENV того же имени
-# (docker-compose.yml/prod-конфиг), иначе на старте контейнера
+# (Variables сервиса на хостинге), иначе на старте контейнера
 # WhisperSttProvider всё равно скачает другую модель заново, теряя смысл
 # этого шага. Скачивание/кеширование весов на этапе сборки — не на первом
 # пользовательском запросе — избавляет прод от рантайм-зависимости от сети
 # HuggingFace (BACKEND_PLAN.md §6 п.10: self-hosted, а не внешний API).
 ARG WHISPER_MODEL_SIZE=tiny
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL_SIZE}', device='cpu', compute_type='int8')"
-
-# EMBEDDING_MODEL — тот же приём, что WHISPER_MODEL_SIZE выше (Stage 5,
-# app/adapters/embeddings.FastEmbedProvider): скачивание ONNX-весов на
-# этапе сборки, не на первом вызове RagService.Search — должен совпадать с
-# рантайм-ENV EMBEDDING_MODEL (docker-compose.yml/prod-конфиг).
-ARG EMBEDDING_MODEL="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='${EMBEDDING_MODEL}')"
 
 EXPOSE 9090 8001
 HEALTHCHECK --interval=5s --timeout=3s --retries=5 CMD ["python", "healthcheck.py"]

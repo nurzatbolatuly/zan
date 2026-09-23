@@ -1,8 +1,8 @@
 """Реальные PyMuPDF/python-docx на настоящих файлах — не моки библиотек
 (BACKEND_CODING_STANDARDS.md §10: поведение, не форма вызова). Tesseract/
 poppler (TesseractOcrProvider) требуют системных бинарей, которых нет в
-локальном dev-окружении без Docker — проверяются в docker compose (см.
-scripts/smoke-test.sh), не здесь."""
+локальном dev-окружении — проверяются вручную в собранном Docker-образе
+helper/, не здесь."""
 
 import io
 

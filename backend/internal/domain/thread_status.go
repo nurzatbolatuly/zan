@@ -11,18 +11,18 @@ import "fmt"
 type ThreadStatus string
 
 const (
-	// ThreadStatusQueued — тред создан, ждёт либо старта обработки (баланс
-	// хватило — service/thread переводит в Processing синхронно в том же
-	// запросе), либо оплаты (баланса не было — zan-backend-tz-v2.md §4.2 п.2).
-	ThreadStatusQueued ThreadStatus = "queued"
+	// ThreadStatusAwaitingPayment — последний вопрос треда сохранён, но не
+	// оплачен: на балансе не было единицы услуги. Один вопрос = одна
+	// консультация: тред рождается в этом статусе и возвращается в него с
+	// каждым новым вопросом, после чего сразу пытается оплатиться с баланса
+	// (thread.Service.activateFromBalance); не вышло — остаётся здесь и
+	// виден в истории, пока пользователь не пополнит баланс и не
+	// перезапустит вопрос или не задаст новый (zan-backend-tz-v2.md §4.2 п.2).
+	ThreadStatusAwaitingPayment ThreadStatus = "awaiting_payment"
 	// ThreadStatusProcessing — идёт вызов агента (Agent.Process).
 	ThreadStatusProcessing ThreadStatus = "processing"
-	// ThreadStatusClarify — агент запросил уточнение (needs_clarification),
-	// это не ошибка: кредит не возвращается, тред ждёт следующее сообщение
-	// пользователя (zan-backend-tz-v3.md §5.2).
-	ThreadStatusClarify ThreadStatus = "clarify"
-	// ThreadStatusDone — агент дал финальный ответ. Не терминален: новое
-	// сообщение в пределах free_until переводит обратно в Processing (§4.3).
+	// ThreadStatusDone — агент дал финальный ответ. Не терминален: новый
+	// вопрос переводит тред в AwaitingPayment (оплата следующего раунда).
 	ThreadStatusDone ThreadStatus = "done"
 	// ThreadStatusError — обработка не удалась (таймаут/невалидный JSON/
 	// отказ модерации), кредит услуги возвращён на баланс. Терминален.
@@ -35,8 +35,8 @@ const (
 // ParseThreadStatus валидирует сырое значение (из запроса/БД) как ThreadStatus.
 func ParseThreadStatus(s string) (ThreadStatus, error) {
 	switch v := ThreadStatus(s); v {
-	case ThreadStatusQueued, ThreadStatusProcessing, ThreadStatusClarify,
-		ThreadStatusDone, ThreadStatusError, ThreadStatusCanceled:
+	case ThreadStatusAwaitingPayment, ThreadStatusProcessing, ThreadStatusDone,
+		ThreadStatusError, ThreadStatusCanceled:
 		return v, nil
 	default:
 		return "", fmt.Errorf("domain: invalid thread status %q", s)
@@ -48,31 +48,26 @@ func ParseThreadStatus(s string) (ThreadStatus, error) {
 // zan-backend-tz-v3.md §5.2). Terminal-статусы (Error, Canceled) сюда не
 // добавляются — отсутствие записи означает "переходов из этого статуса нет".
 //
-//   - Queued -> Processing: баланс списан (или уже был is_paid=true),
+//   - AwaitingPayment -> Processing: единица услуги списана с баланса,
 //     агент стартует.
-//   - Queued -> Canceled: отмена до оплаты (§3.2 — "до оплаты").
-//   - Processing -> Done/Clarify/Error: результат Agent.Process.
+//   - AwaitingPayment -> Canceled: отмена до оплаты (§3.2 — "до оплаты").
+//   - Processing -> Done/Error: результат Agent.Process.
 //   - Processing -> Canceled: отмена во время обработки (§3.2 — "во время
 //     обработки").
-//   - Clarify -> Processing: пользователь ответил на уточнение.
-//   - Done -> Processing: новое сообщение внутри free_until (§4.3) —
-//     повторное бесплатное уточнение уже отвеченного треда.
+//   - Done -> AwaitingPayment: новый вопрос в уже отвеченном треде —
+//     отдельная консультация, оплачивается как первая.
 var threadTransitions = map[ThreadStatus]map[ThreadStatus]bool{
-	ThreadStatusQueued: {
+	ThreadStatusAwaitingPayment: {
 		ThreadStatusProcessing: true,
 		ThreadStatusCanceled:   true,
 	},
 	ThreadStatusProcessing: {
 		ThreadStatusDone:     true,
-		ThreadStatusClarify:  true,
 		ThreadStatusError:    true,
 		ThreadStatusCanceled: true,
 	},
-	ThreadStatusClarify: {
-		ThreadStatusProcessing: true,
-	},
 	ThreadStatusDone: {
-		ThreadStatusProcessing: true,
+		ThreadStatusAwaitingPayment: true,
 	},
 }
 

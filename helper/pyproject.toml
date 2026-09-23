@@ -1,7 +1,7 @@
 [project]
 name = "zan-helper"
 version = "0.1.0"
-description = "Zan — Python-сервис специализированных ML-задач (RAG/файлы/голос/рендер документов), вызывается только из backend/ по gRPC. См. BACKEND_PLAN.md."
+description = "Zan — Python-сервис работы с файлами и голосом (извлечение текста, STT, рендер документов), вызывается только из backend/ по gRPC. См. instructions.md."
 requires-python = ">=3.12"
 dependencies = [
     "grpcio>=1.84,<2",
@@ -21,10 +21,6 @@ dependencies = [
     "faster-whisper>=1.2,<2", # self-hosted STT (SttService.Transcribe, BACKEND_PLAN.md §6 п.10)
     "docxtpl>=0.20,<1", # рендер DOCX из Jinja2-шаблона (DocumentsService.Render)
     "weasyprint>=70,<71", # рендер PDF из HTML/CSS (DocumentsService.Render, требует системных cairo/pango — см. Dockerfile)
-    # --- Stage 5 (BACKEND_PLAN.md §1.2, §1.3) ---
-    "asyncpg>=0.31,<1", # доступ к схеме rag (владеет и мигрирует только Python) — raw SQL, без ORM, тот же принцип, что pgx напрямую в Go
-    "alembic>=1.20,<2", # миграции схемы rag, отдельный CLI от рантайма (то же решение, что golang-migrate у backend/)
-    "fastembed>=0.8,<1", # self-hosted embeddings (ONNX, без torch) — RagService.Search, BACKEND_PLAN.md §6 п.10 (тот же Strategy-приём, что self-hosted STT)
 ]
 
 [project.optional-dependencies]
@@ -37,7 +33,6 @@ dev = [
     "types-grpcio>=1.83,<2",
     "types-grpcio-reflection>=1.0,<2",
     "boto3-stubs[s3]>=1.43,<2",
-    "asyncpg-stubs>=0.31,<1", # Stage 5 — asyncpg сам не несёт py.typed
     # moto не поддерживает кастомный endpoint_url (нужен для MinIO) —
     # реальный MinIO в testcontainers, тот же образ и подход, что и
     # backend/internal/platform/storage/s3_test.go (BACKEND_CODING_STANDARDS.md §10).
@@ -118,7 +113,7 @@ disable_error_code = ["no-untyped-call"]
 # и add_*Servicer_to_server (types-grpcio типизирует их под синхронный
 # grpc.Channel/grpc.Server, не grpc.aio — известное ограничение пакета,
 # см. tests/test_grpc_server.py).
-module = ["tests.test_grpc_servicers", "tests.test_rag_servicer"]
+module = "tests.test_grpc_servicers"
 disable_error_code = ["no-untyped-call"]
 
 [[tool.mypy.overrides]]

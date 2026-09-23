@@ -1,65 +1,40 @@
 /**
- * Домен чата (PLAN.md «Stage 1 — Chat»). Ассистентские сообщения не хранят
- * переведённый текст внутри себя — только `replyKind` (какой из мок-сценариев
- * сработал). Сам текст/источники/находки достаются из mocks.ts по (kind, lang)
- * в момент рендера — иначе при переключении языка старые сообщения треда
- * остались бы на предыдущем языке или пришлось бы дублировать контент на
- * оба языка внутри каждого сообщения.
+ * Домен чата (Stage 6). Сообщения треда больше не хранятся в клиентском
+ * состоянии — источник истины `useQuery(["thread", id])` (см. useChatThread.ts),
+ * здесь остаётся только то, что действительно клиентское: черновик,
+ * стейджинг вложения/записи голоса до отправки, локально развёрнутые
+ * источники (UI-состояние, не серверное).
  */
 
 export type AttachmentKind = "pdf" | "docx" | "image" | "other";
 
-export interface ChatAttachment {
-  id: string;
-  name: string;
-  kind: AttachmentKind;
-  sizeLabel: string;
-}
-
-export interface ChatSource {
-  ref: string;
-  quote: string;
-}
-
-export interface ChatFinding {
-  title: string;
-  body: string;
-}
-
-export interface ChatDocument {
-  title: string;
-  description: string;
-}
-
-export type MessageVote = "up" | "down" | null;
-
-/** Какой мок-сценарий ответа выбран (gap: явный toggle "документ" + вложение файла из brief 3.1-3.2). */
-export type AssistantReplyKind = "qa" | "contract-review" | "document";
-
-export interface UserChatMessage {
-  id: string;
-  role: "user";
-  text: string;
-  attachment: ChatAttachment | null;
-  createdAt: number;
-}
-
-export interface AssistantChatMessage {
-  id: string;
-  role: "assistant";
-  replyKind: AssistantReplyKind;
-  vote: MessageVote;
-  createdAt: number;
-}
-
-export type ChatMessage = UserChatMessage | AssistantChatMessage;
-
 /**
- * То, что уходит "на сервер" при отправке — реальным API станет в Stage 6.
- * Явного флага "нужен документ" здесь нет: бэк определяет это сам по контексту
- * сообщения (решение от 2026-09-20 — см. features/chat/documentIntent.ts).
+ * Вложение проходит три стадии перед тем, как попасть в `file_ids` запроса:
+ * `uploading` (идёт `POST /files/upload`) → `ready` (есть `fileId`) или
+ * `error` (загрузка не удалась — composer снимает вложение и показывает тост,
+ * этот статус в состоянии не задерживается).
  */
-export interface OutgoingChatRequest {
-  text: string;
-  attachment: ChatAttachment | null;
-}
+export type ChatAttachment =
+  | {
+      status: "uploading";
+      id: string;
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+    }
+  | {
+      status: "ready";
+      id: string;
+      fileId: string;
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+    };
+
+/** Ре-экспорт wire-типа сообщения — компоненты чата рендерят его напрямую, без адаптации. */
+export type { MessageDto as ChatMessage } from "@/shared/types/api";
+
+/** Откуда взят текущий текст в composer — определяет `input_type` при отправке
+ * (voice, пока текст не тронут руками после распознавания; иначе text). Вложение
+ * при наличии всегда даёт `input_type: "file"` — это решает useChatThread, не этот тип. */
+export type DraftSource = "text" | "voice";

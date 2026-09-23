@@ -30,3 +30,32 @@ export function getApiBaseUrlSafe(): string | null {
   const raw = import.meta.env.VITE_API_BASE_URL;
   return raw ? normalizeBaseUrl(raw) : null;
 }
+
+/**
+ * WS-адрес выводится из `VITE_API_BASE_URL` (http→ws, https→wss) — отдельного
+ * `VITE_WS_*` нет: тот же origin, что REST, соответствует текущей модели
+ * деплоя одним доменом (см. instructions.md, раздел «Деплой»).
+ */
+export function getWsBaseUrl(): string {
+  return getApiBaseUrl().replace(/^http/, "ws");
+}
+
+/**
+ * Лимит размера вложения — зеркало `FILE_MAX_SIZE_BYTES` бэкенда (значения
+ * держать равными). Проверяется до `POST /files/upload`: заведомо большой файл
+ * иначе ушёл бы на сервер целиком, а тот обрывает приём на лимите — вместо
+ * понятного `413 file_too_large` браузер мог бы показать сетевую ошибку.
+ * Как и `getApiBaseUrl`, при кривой конфигурации бросает, а не подставляет
+ * число молча.
+ */
+export function getFileMaxSizeBytes(): number {
+  const raw = import.meta.env.VITE_FILE_MAX_SIZE_BYTES;
+  const value = Number(raw);
+  if (!raw || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(
+      "VITE_FILE_MAX_SIZE_BYTES не задан или не положительное целое число байт. " +
+        "Локально — .env (см. .env.example), на хостинге — переменные окружения проекта.",
+    );
+  }
+  return value;
+}

@@ -19,9 +19,11 @@ function roundToTens(value: number): number {
 }
 
 export function computeItemsSubtotal(items: BundleItem[], prices: PriceTable): number {
-  // `?? 0` — не бизнес-правило, а следствие открытого `ServiceId` (shared/types/tariff.ts):
-  // для реально существующей услуги цена в таблице есть всегда, но
-  // `noUncheckedIndexedAccess` больше не может этого гарантировать по типу.
+  // `?? 0` — защита границы системы (FRONT_CODING_STANDARDS.md), не бизнес-правило:
+  // `ServiceId` закрыт (`"qa" | "doc"`, Stage 6), TS гарантирует, что `prices[...]`
+  // всегда `number`, но `items`/`prices` приходят из реального JSON с бэка — если
+  // когда-нибудь появится третья услуга раньше, чем фронт про неё узнает, это не
+  // должно превратить сумму в NaN на экране.
   return items.reduce((sum, item) => sum + (prices[item.serviceId] ?? 0) * item.qty, 0);
 }
 

@@ -1,7 +1,7 @@
 import { computeBundlePrice as computeBundlePriceShared } from "@/shared/lib/tariffPricing";
 import type { BundlePrice } from "@/shared/lib/tariffPricing";
-import type { PriceTable, ServiceId } from "@/shared/types/tariff";
-import type { Bundle, BundleItem, Service } from "./types";
+import type { PriceTable } from "@/shared/types/tariff";
+import type { BundleItem, Service } from "./types";
 
 function toPriceTable(services: Service[]): PriceTable {
   const table = {} as PriceTable;
@@ -23,19 +23,4 @@ export function calcBundlePrice(
   discountPercent: number,
 ): BundlePrice {
   return computeBundlePriceShared({ items, discountPercent }, toPriceTable(services));
-}
-
-/**
- * Первый тариф, в состав которого реально входит данная услуга (qty > 0) —
- * используется, чтобы заблокировать удаление услуги из `useAdminTariffs.ts`:
- * удалить услугу, которая используется хотя бы в одном тарифе, нельзя — иначе
- * итоговая цена этого тарифа молча "усохнет" без объяснения.
- */
-export function findBundleUsingService(
-  bundles: Bundle[],
-  serviceId: ServiceId,
-): Bundle | undefined {
-  return bundles.find((bundle) =>
-    bundle.items.some((item) => item.serviceId === serviceId && item.qty > 0),
-  );
 }

@@ -7,7 +7,10 @@ interface ConfirmOptions {
   cancelLabel: string;
   /** true → кнопка подтверждения красная (удаление и т.п.) */
   destructive: boolean;
-  onConfirm: () => void;
+  /** Реальный сетевой вызов (Stage 6: DELETE /threads/{id}, /admin/tariffs/{id}
+   * и т.п.) — модалка ждёт промис и закрывается только при успехе, см.
+   * ConfirmModal.tsx. */
+  onConfirm: () => Promise<void>;
 }
 
 interface ConfirmModalState extends ConfirmOptions {
@@ -25,7 +28,7 @@ const DEFAULTS: ConfirmOptions = {
   confirmLabel: "Удалить",
   cancelLabel: "Отмена",
   destructive: true,
-  onConfirm: () => {},
+  onConfirm: () => Promise.resolve(),
 };
 
 /**

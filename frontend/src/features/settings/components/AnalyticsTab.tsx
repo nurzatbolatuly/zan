@@ -1,51 +1,78 @@
-import { Card } from "@/shared/ui";
+import { Button, Card, EmptyState, Skeleton } from "@/shared/ui";
 import { useLangStore } from "@/shared/stores/useLangStore";
 import { settingsDictionary } from "../locales";
-import { ANALYTICS_MOCKS } from "../mocks";
+import { useAdminAnalytics } from "../useAdminAnalytics";
 import { StatusBarRow } from "./StatusBarRow";
 
 /**
- * Settings → Аналитика (PLAN.md §5 Stage 4c). Горизонтальные бары, не
- * полноценный чарт — 6 категорий читаются проще так, чем пирогом; навык
- * `dataviz` не требуется на этом этапе (см. PLAN.md §5 Stage 4c, дословно).
+ * Settings → Аналитика (PLAN.md §5 Stage 4c, Stage 6 — реальный
+ * `GET /admin/analytics/overview`). Горизонтальные бары, не полноценный
+ * чарт — 6 категорий читаются проще так, чем пирогом.
  */
 export function AnalyticsTab() {
   const lang = useLangStore((state) => state.lang);
-  const t = settingsDictionary[lang].analytics;
-  const analytics = ANALYTICS_MOCKS[lang];
-  const maxCount = Math.max(...analytics.byStatus.map((row) => row.count));
+  const t = settingsDictionary[lang];
+  const { dictionary, summary, isLoading, isError, retry } = useAdminAnalytics();
+
+  if (isError) {
+    return (
+      <Card>
+        <EmptyState
+          title={t.common.loadError}
+          action={<Button onClick={retry}>{t.common.retry}</Button>}
+        />
+      </Card>
+    );
+  }
+
+  if (isLoading || !summary) {
+    return (
+      <Card>
+        <Skeleton className="mb-5 h-20" />
+        <Skeleton className="h-40" />
+      </Card>
+    );
+  }
+
+  const maxCount = Math.max(...summary.byStatus.map((row) => row.count));
 
   return (
     <Card>
-      <h2 className="text-h3 text-ink">{t.title}</h2>
-      <p className="mb-5 text-caption text-muted">{t.subtitle}</p>
+      <h2 className="text-h3 text-ink">{dictionary.title}</h2>
+      <p className="mb-5 text-caption text-muted">{dictionary.subtitle}</p>
 
       <div className="mb-5 grid grid-cols-1 gap-2.5 sm:grid-cols-3">
         <div className="rounded-lg border border-line p-3.5">
-          <div className="mb-1.5 text-caption text-muted">{t.metricTotal}</div>
+          <div className="mb-1.5 text-caption text-muted">{dictionary.metricTotal}</div>
           <div className="text-h2 text-ink">
-            {analytics.totalRequests.toLocaleString("ru-RU")}
+            {summary.totalRequests.toLocaleString("ru-RU")}
           </div>
         </div>
         <div className="rounded-lg border border-line p-3.5">
-          <div className="mb-1.5 text-caption text-muted">{t.metricAvgTime}</div>
-          <div className="text-h2 text-ink">{analytics.avgResponseTimeLabel}</div>
+          <div className="mb-1.5 text-caption text-muted">{dictionary.metricAvgTime}</div>
+          <div className="text-h2 text-ink">
+            {summary.avgResponseTimeLabel ?? dictionary.noDataYet}
+          </div>
         </div>
         <div className="rounded-lg border border-line p-3.5">
-          <div className="mb-1.5 text-caption text-muted">{t.metricSatisfaction}</div>
-          <div className="text-h2 text-ink">{analytics.satisfactionRateLabel}</div>
+          <div className="mb-1.5 text-caption text-muted">
+            {dictionary.metricSatisfaction}
+          </div>
+          <div className="text-h2 text-ink">
+            {summary.satisfactionRateLabel ?? dictionary.noDataYet}
+          </div>
         </div>
       </div>
 
       <div className="mb-2.5 font-mono text-micro font-bold uppercase text-muted">
-        {t.byStatusTitle}
+        {dictionary.byStatusTitle}
       </div>
       <div className="flex flex-col gap-2">
-        {analytics.byStatus.map((row) => (
+        {summary.byStatus.map((row) => (
           <StatusBarRow
             key={row.status}
             status={row.status}
-            label={t.statusLabel[row.status]}
+            label={dictionary.statusLabel[row.status]}
             count={row.count}
             ratio={maxCount > 0 ? row.count / maxCount : 0}
           />

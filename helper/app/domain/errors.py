@@ -26,12 +26,3 @@ class SttError(Exception):
 
 class RenderError(Exception):
     """DocumentsService.Render не смог собрать файл из шаблона."""
-
-
-class RagUnavailableError(Exception):
-    """RagService.Search не может выполниться — схема rag недоступна (пул
-    соединений не удалось создать при старте процесса, см. app.main —
-    ошибка при бутстрапе не должна ронять весь helper/, он обслуживает ещё
-    три несвязанных сервиса). Маппится на INTERNAL (app/grpc/error_mapping.py)
-    — Go-сторона трактует любую ошибку RagService.Search как деградацию, не
-    блокировку (BACKEND_PLAN.md §5.2: "Go продолжает без источников")."""

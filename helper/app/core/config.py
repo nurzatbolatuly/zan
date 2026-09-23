@@ -49,27 +49,6 @@ class Settings(BaseSettings):
     # точности, не заводится "про запас" сейчас.
     whisper_model_size: str = "tiny"
 
-    # --- RAG (Stage 5, BACKEND_PLAN.md §1.3, §3) ---
-
-    # rag_database_url — DSN схемы rag, под отдельной, ограниченной ролью
-    # Postgres (не той, что использует backend/DATABASE_URL — роль не имеет
-    # прав на схему core и наоборот, см. helper/migrations/env.py и
-    # scripts/postgres-init/, BACKEND_PLAN.md §1.3: "предотвращает случайную
-    # связность мимо gRPC-контракта"). Без дефолта намеренно — тот же
-    # принцип, что internal_secret/s3_access_key.
-    rag_database_url: str
-
-    # embedding_model — self-hosted fastembed (ONNX), см.
-    # app/adapters/embeddings.FastEmbedProvider. Многоязычная модель,
-    # покрывает ru (kz — слабее, см. модуль) — конфигурируемо тем же
-    # принципом, что whisper_model_size: смена без переписывания кода.
-    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-    # rag_search_top_k_default — top_k, если вызывающая сторона его не
-    # передала (RagServicer._DEFAULT_TOP_K использует это значение через
-    # settings, не хардкодит отдельно — см. app/main.py).
-    rag_search_top_k_default: int = 5
-
     def resolved_s3_public_endpoint(self) -> str:
         return self.s3_public_endpoint or self.s3_endpoint
 

@@ -20,7 +20,7 @@ import (
 // BillingRepo.ConfirmPayment/DebitCredit — BACKEND_CODING_STANDARDS.md
 // §1.1): вставка Thread+Message или Message+счётчики треда должны либо
 // применяться вместе, либо не применяться совсем. Переходы статус-машины
-// (UpdateStatus/ActivatePaid) — одной guarded UPDATE, транзакция не нужна.
+// (UpdateStatus) — одной guarded UPDATE, транзакция не нужна.
 type ThreadRepo struct {
 	db *pgxpool.Pool
 }
@@ -53,12 +53,12 @@ func (r *ThreadRepo) CreateThread(ctx context.Context, t domain.Thread, firstMes
 	threadRowResult := tx.QueryRow(ctx, `
 		INSERT INTO core.threads (
 		    id, session_id, service_id, status, title, preview_text, message_count,
-		    is_paid, paid_at, free_until, created_at, last_message_at
+		    created_at, last_message_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING id, session_id, service_id, status, title, preview_text, message_count, is_paid, paid_at, free_until, created_at, last_message_at, closed_at, deleted_at
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, session_id, service_id, status, title, preview_text, message_count, created_at, last_message_at, deleted_at
 	`, id, sessionID, t.ServiceID, string(t.Status), t.Title, t.PreviewText, messageCount,
-		t.IsPaid, optionalTimestamptz(t.PaidAt), optionalTimestamptz(t.FreeUntil), toTimestamptz(t.CreatedAt), optionalTimestamptz(t.LastMessageAt))
+		toTimestamptz(t.CreatedAt), optionalTimestamptz(t.LastMessageAt))
 
 	var tr threadRow
 	if err := tr.scan(threadRowResult); err != nil {
@@ -89,7 +89,7 @@ func (r *ThreadRepo) GetByID(ctx context.Context, id string) (domain.Thread, err
 	}
 
 	row := r.db.QueryRow(ctx, `
-		SELECT id, session_id, service_id, status, title, preview_text, message_count, is_paid, paid_at, free_until, created_at, last_message_at, closed_at, deleted_at
+		SELECT id, session_id, service_id, status, title, preview_text, message_count, created_at, last_message_at, deleted_at
 		FROM core.threads
 		WHERE id = $1
 	`, pgID)
@@ -111,7 +111,7 @@ func (r *ThreadRepo) GetMessages(ctx context.Context, threadID string) ([]domain
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT id, thread_id, sender, input_type, text, sources, findings, unverified_sources, feedback, processing_time_ms, created_at
+		SELECT id, thread_id, sender, input_type, text, sources, findings, feedback, processing_time_ms, created_at
 		FROM core.messages
 		WHERE thread_id = $1
 		ORDER BY created_at ASC
@@ -135,6 +135,93 @@ func (r *ThreadRepo) GetMessages(ctx context.Context, threadID string) ([]domain
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("repo: get messages: %w", err)
+	}
+	rows.Close()
+
+	// Вложения — вторым запросом, а не JOIN'ом: у сообщения может быть
+	// несколько файлов, строки сообщений не должны размножаться.
+	// extracted_text не читается (NULL) — см. domain.Message.Attachments.
+	fileRows, err := r.db.Query(ctx, `
+		SELECT f.id, f.session_id, f.message_id, f.thread_id, f.object_key, f.original_name, f.mime_type, f.size_bytes,
+		       f.purpose, f.output_formats, f.processing_status, NULL::text AS extracted_text, f.created_at
+		FROM core.file_attachments f
+		JOIN core.messages m ON m.id = f.message_id
+		WHERE m.thread_id = $1
+		  AND f.purpose = 'analysis_input'
+		ORDER BY f.created_at ASC
+	`, pgThreadID)
+	if err != nil {
+		return nil, fmt.Errorf("repo: get messages: attachments: %w", err)
+	}
+	defer fileRows.Close()
+
+	byMessageID := make(map[string][]domain.FileAttachment)
+	for fileRows.Next() {
+		var fr fileRow
+		if err := fr.scan(fileRows); err != nil {
+			return nil, fmt.Errorf("repo: get messages: attachments: scan: %w", err)
+		}
+		f, err := fr.toDomain()
+		if err != nil {
+			return nil, err
+		}
+		byMessageID[*f.MessageID] = append(byMessageID[*f.MessageID], f)
+	}
+	if err := fileRows.Err(); err != nil {
+		return nil, fmt.Errorf("repo: get messages: attachments: %w", err)
+	}
+	for i := range msgs {
+		msgs[i].Attachments = byMessageID[msgs[i].ID]
+	}
+	return msgs, nil
+}
+
+// GetConversation — история треда для LLM: GetMessages (сообщения с
+// метаданными вложений) плюс извлечённый текст каждого вложения.
+func (r *ThreadRepo) GetConversation(ctx context.Context, threadID string) ([]domain.Message, error) {
+	msgs, err := r.GetMessages(ctx, threadID)
+	if err != nil {
+		return nil, err
+	}
+	pgThreadID, err := parseUUID(threadID)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT f.id, f.extracted_text
+		FROM core.file_attachments f
+		JOIN core.messages m ON m.id = f.message_id
+		WHERE m.thread_id = $1
+		  AND f.purpose = 'analysis_input'
+		  AND f.extracted_text IS NOT NULL
+	`, pgThreadID)
+	if err != nil {
+		return nil, fmt.Errorf("repo: get conversation: extracted text: %w", err)
+	}
+	defer rows.Close()
+
+	textByFileID := make(map[string]string)
+	for rows.Next() {
+		var (
+			id   pgtype.UUID
+			text string
+		)
+		if err := rows.Scan(&id, &text); err != nil {
+			return nil, fmt.Errorf("repo: get conversation: extracted text: scan: %w", err)
+		}
+		textByFileID[fromPgUUID(id)] = text
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repo: get conversation: extracted text: %w", err)
+	}
+
+	for i := range msgs {
+		for j := range msgs[i].Attachments {
+			if text, ok := textByFileID[msgs[i].Attachments[j].ID]; ok {
+				msgs[i].Attachments[j].ExtractedText = &text
+			}
+		}
 	}
 	return msgs, nil
 }
@@ -162,7 +249,7 @@ func (r *ThreadRepo) ListThreads(ctx context.Context, sessionID string, filter t
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT threads.id, threads.session_id, threads.service_id, threads.status, threads.title, threads.preview_text, threads.message_count, threads.is_paid, threads.paid_at, threads.free_until, threads.created_at, threads.last_message_at, threads.closed_at, threads.deleted_at, count(*) OVER () AS total_count
+		SELECT threads.id, threads.session_id, threads.service_id, threads.status, threads.title, threads.preview_text, threads.message_count, threads.created_at, threads.last_message_at, threads.deleted_at, count(*) OVER () AS total_count
 		FROM core.threads AS threads
 		WHERE session_id = $1
 		  AND deleted_at IS NULL
@@ -188,7 +275,7 @@ func (r *ThreadRepo) ListThreads(ctx context.Context, sessionID string, filter t
 		var totalCount int64
 		if err := rows.Scan(
 			&tr.id, &tr.sessionID, &tr.serviceID, &tr.status, &tr.title, &tr.previewText, &tr.messageCount,
-			&tr.isPaid, &tr.paidAt, &tr.freeUntil, &tr.createdAt, &tr.lastMessageAt, &tr.closedAt, &tr.deletedAt,
+			&tr.createdAt, &tr.lastMessageAt, &tr.deletedAt,
 			&totalCount,
 		); err != nil {
 			return nil, 0, fmt.Errorf("repo: list threads: scan: %w", err)
@@ -232,7 +319,7 @@ func (r *ThreadRepo) AppendMessage(ctx context.Context, msg domain.Message) (dom
 		SET message_count   = message_count + 1,
 		    last_message_at = $2
 		WHERE id = $1
-		RETURNING id, session_id, service_id, status, title, preview_text, message_count, is_paid, paid_at, free_until, created_at, last_message_at, closed_at, deleted_at
+		RETURNING id, session_id, service_id, status, title, preview_text, message_count, created_at, last_message_at, deleted_at
 	`, pgThreadID, toTimestamptz(msg.CreatedAt))
 
 	var tr threadRow
@@ -266,7 +353,7 @@ func (r *ThreadRepo) UpdateStatus(ctx context.Context, id string, from []domain.
 		    preview_text = $3
 		WHERE id = $1
 		  AND status = ANY($4::text[])
-		RETURNING id, session_id, service_id, status, title, preview_text, message_count, is_paid, paid_at, free_until, created_at, last_message_at, closed_at, deleted_at
+		RETURNING id, session_id, service_id, status, title, preview_text, message_count, created_at, last_message_at, deleted_at
 	`, pgID, string(to), previewText, fromStatuses)
 
 	var tr threadRow
@@ -278,64 +365,6 @@ func (r *ThreadRepo) UpdateStatus(ctx context.Context, id string, from []domain.
 	}
 	t, err := tr.toDomain()
 	return t, true, err
-}
-
-// zan-backend-tz-v2.md §4.2 п.2: после confirm начисленный кредит сразу
-// списывается — тред одной атомарной операцией становится оплаченным и
-// переходит в processing. WHERE-гейт делает вызов идемпотентным (повторный
-// confirm на уже активированный тред — 0 строк, не повторное списание).
-func (r *ThreadRepo) ActivatePaid(ctx context.Context, id string, paidAt, freeUntil time.Time, previewText string) (domain.Thread, bool, error) {
-	pgID, err := parseUUID(id)
-	if err != nil {
-		return domain.Thread{}, false, err
-	}
-
-	row := r.db.QueryRow(ctx, `
-		UPDATE core.threads
-		SET is_paid      = true,
-		    paid_at      = $2,
-		    free_until   = $3,
-		    status       = 'processing',
-		    preview_text = $4
-		WHERE id = $1
-		  AND status = 'queued'
-		  AND is_paid = false
-		RETURNING id, session_id, service_id, status, title, preview_text, message_count, is_paid, paid_at, free_until, created_at, last_message_at, closed_at, deleted_at
-	`, pgID, toTimestamptz(paidAt), toTimestamptz(freeUntil), previewText)
-
-	var tr threadRow
-	if err := tr.scan(row); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Thread{}, false, nil
-		}
-		return domain.Thread{}, false, fmt.Errorf("repo: activate thread paid: %w", err)
-	}
-	t, err := tr.toDomain()
-	return t, true, err
-}
-
-func (r *ThreadRepo) CloseIfExpired(ctx context.Context, id string, now time.Time) (bool, error) {
-	pgID, err := parseUUID(id)
-	if err != nil {
-		return false, err
-	}
-
-	row := r.db.QueryRow(ctx, `
-		UPDATE core.threads
-		SET closed_at = $2
-		WHERE id = $1
-		  AND closed_at IS NULL
-		RETURNING id
-	`, pgID, toTimestamptz(now))
-
-	var discardedID pgtype.UUID
-	if err := row.Scan(&discardedID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, fmt.Errorf("repo: close thread if expired: %w", err)
-	}
-	return true, nil
 }
 
 func (r *ThreadRepo) SoftDelete(ctx context.Context, id string, now time.Time) (bool, error) {
@@ -381,7 +410,7 @@ func (r *ThreadRepo) SetMessageFeedback(ctx context.Context, messageID, sessionI
 		SET feedback = $2
 		WHERE m.id = $1
 		  AND m.thread_id IN (SELECT t.id FROM core.threads AS t WHERE t.session_id = $3)
-		RETURNING m.id, m.thread_id, m.sender, m.input_type, m.text, m.sources, m.findings, m.unverified_sources, m.feedback, m.processing_time_ms, m.created_at
+		RETURNING m.id, m.thread_id, m.sender, m.input_type, m.text, m.sources, m.findings, m.feedback, m.processing_time_ms, m.created_at
 	`, pgMessageID, pgtype.Text{String: string(feedback), Valid: true}, pgSessionID)
 
 	var mr messageRow
@@ -419,11 +448,11 @@ func insertMessage(ctx context.Context, tx pgx.Tx, m domain.Message, pgThreadID 
 
 	row := tx.QueryRow(ctx, `
 		INSERT INTO core.messages (
-		    id, thread_id, sender, input_type, text, sources, findings, unverified_sources, processing_time_ms, created_at
+		    id, thread_id, sender, input_type, text, sources, findings, processing_time_ms, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, thread_id, sender, input_type, text, sources, findings, unverified_sources, feedback, processing_time_ms, created_at
-	`, id, pgThreadID, string(m.Sender), string(m.InputType), m.Text, sourcesJSON, findingsJSON, m.UnverifiedSources, processingTimeMs, toTimestamptz(m.CreatedAt))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, thread_id, sender, input_type, text, sources, findings, feedback, processing_time_ms, created_at
+	`, id, pgThreadID, string(m.Sender), string(m.InputType), m.Text, sourcesJSON, findingsJSON, processingTimeMs, toTimestamptz(m.CreatedAt))
 
 	var mr messageRow
 	if err := mr.scan(row); err != nil {
@@ -459,19 +488,15 @@ type threadRow struct {
 	title         string
 	previewText   string
 	messageCount  int32
-	isPaid        bool
-	paidAt        pgtype.Timestamptz
-	freeUntil     pgtype.Timestamptz
 	createdAt     pgtype.Timestamptz
 	lastMessageAt pgtype.Timestamptz
-	closedAt      pgtype.Timestamptz
 	deletedAt     pgtype.Timestamptz
 }
 
 func (tr *threadRow) scan(row rowScanner) error {
 	return row.Scan(
 		&tr.id, &tr.sessionID, &tr.serviceID, &tr.status, &tr.title, &tr.previewText, &tr.messageCount,
-		&tr.isPaid, &tr.paidAt, &tr.freeUntil, &tr.createdAt, &tr.lastMessageAt, &tr.closedAt, &tr.deletedAt,
+		&tr.createdAt, &tr.lastMessageAt, &tr.deletedAt,
 	)
 }
 
@@ -488,34 +513,29 @@ func (tr threadRow) toDomain() (domain.Thread, error) {
 		Title:         tr.title,
 		PreviewText:   tr.previewText,
 		MessageCount:  int(tr.messageCount),
-		IsPaid:        tr.isPaid,
-		PaidAt:        fromOptionalTimestamptz(tr.paidAt),
-		FreeUntil:     fromOptionalTimestamptz(tr.freeUntil),
 		CreatedAt:     tr.createdAt.Time,
 		LastMessageAt: fromOptionalTimestamptz(tr.lastMessageAt),
-		ClosedAt:      fromOptionalTimestamptz(tr.closedAt),
 		DeletedAt:     fromOptionalTimestamptz(tr.deletedAt),
 	}, nil
 }
 
 type messageRow struct {
-	id                pgtype.UUID
-	threadID          pgtype.UUID
-	sender            string
-	inputType         string
-	text              string
-	sources           []byte
-	findings          []byte
-	unverifiedSources bool
-	feedback          pgtype.Text
-	processingTimeMs  pgtype.Int4
-	createdAt         pgtype.Timestamptz
+	id               pgtype.UUID
+	threadID         pgtype.UUID
+	sender           string
+	inputType        string
+	text             string
+	sources          []byte
+	findings         []byte
+	feedback         pgtype.Text
+	processingTimeMs pgtype.Int4
+	createdAt        pgtype.Timestamptz
 }
 
 func (mr *messageRow) scan(row rowScanner) error {
 	return row.Scan(
 		&mr.id, &mr.threadID, &mr.sender, &mr.inputType, &mr.text,
-		&mr.sources, &mr.findings, &mr.unverifiedSources, &mr.feedback, &mr.processingTimeMs, &mr.createdAt,
+		&mr.sources, &mr.findings, &mr.feedback, &mr.processingTimeMs, &mr.createdAt,
 	)
 }
 
@@ -557,17 +577,16 @@ func (mr messageRow) toDomain() (domain.Message, error) {
 	}
 
 	return domain.Message{
-		ID:                fromPgUUID(mr.id),
-		ThreadID:          fromPgUUID(mr.threadID),
-		Sender:            sender,
-		InputType:         inputType,
-		Text:              mr.text,
-		Sources:           sources,
-		Findings:          findings,
-		UnverifiedSources: mr.unverifiedSources,
-		Feedback:          feedback,
-		ProcessingTimeMs:  processingTimeMs,
-		CreatedAt:         mr.createdAt.Time,
+		ID:               fromPgUUID(mr.id),
+		ThreadID:         fromPgUUID(mr.threadID),
+		Sender:           sender,
+		InputType:        inputType,
+		Text:             mr.text,
+		Sources:          sources,
+		Findings:         findings,
+		Feedback:         feedback,
+		ProcessingTimeMs: processingTimeMs,
+		CreatedAt:        mr.createdAt.Time,
 	}, nil
 }
 

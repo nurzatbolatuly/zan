@@ -3,6 +3,7 @@ package thread_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,9 +21,17 @@ import (
 // fakeRepo — in-memory реализация thread.Repository для юнит-тестов, без
 // БД (BACKEND_CODING_STANDARDS.md §10). Реальная семантика гонок/атомарности
 // проверяется отдельно, internal/repo/thread_repo_test.go (testcontainers).
+// Stage 9: обработка фоновая (dispatchProcessing) — репозиторий теперь
+// читается/пишется из горутины теста И из фоновой горутины конкурентно,
+// mu обязателен (иначе -race валится на конкурентном доступе к map).
 type fakeRepo struct {
+	mu       sync.Mutex
 	threads  map[string]domain.Thread
 	messages map[string][]domain.Message
+	// activateLosesRace — симулирует параллельный запрос, успевший
+	// запустить вопрос между списанием и переходом
+	// AwaitingPayment -> Processing (UpdateStatus ok=false).
+	activateLosesRace bool
 }
 
 func newFakeRepo() *fakeRepo {
@@ -30,6 +39,8 @@ func newFakeRepo() *fakeRepo {
 }
 
 func (r *fakeRepo) CreateThread(_ context.Context, t domain.Thread, firstMessage domain.Message) (domain.Thread, domain.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	firstMessage.ThreadID = t.ID
 	r.threads[t.ID] = t
 	r.messages[t.ID] = []domain.Message{firstMessage}
@@ -37,6 +48,8 @@ func (r *fakeRepo) CreateThread(_ context.Context, t domain.Thread, firstMessage
 }
 
 func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Thread, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t, ok := r.threads[id]
 	if !ok {
 		return domain.Thread{}, thread.ErrThreadNotFound
@@ -45,10 +58,18 @@ func (r *fakeRepo) GetByID(_ context.Context, id string) (domain.Thread, error) 
 }
 
 func (r *fakeRepo) GetMessages(_ context.Context, threadID string) ([]domain.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return append([]domain.Message(nil), r.messages[threadID]...), nil
 }
 
+func (r *fakeRepo) GetConversation(ctx context.Context, threadID string) ([]domain.Message, error) {
+	return r.GetMessages(ctx, threadID)
+}
+
 func (r *fakeRepo) ListThreads(_ context.Context, sessionID string, filter thread.ListFilter) ([]domain.Thread, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	matched := make([]domain.Thread, 0)
 	for _, t := range r.threads {
 		if t.SessionID == sessionID && !t.IsDeleted() {
@@ -59,6 +80,8 @@ func (r *fakeRepo) ListThreads(_ context.Context, sessionID string, filter threa
 }
 
 func (r *fakeRepo) AppendMessage(_ context.Context, msg domain.Message) (domain.Thread, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t, ok := r.threads[msg.ThreadID]
 	if !ok {
 		return domain.Thread{}, thread.ErrThreadNotFound
@@ -72,6 +95,8 @@ func (r *fakeRepo) AppendMessage(_ context.Context, msg domain.Message) (domain.
 }
 
 func (r *fakeRepo) UpdateStatus(_ context.Context, id string, from []domain.ThreadStatus, to domain.ThreadStatus, previewText string) (domain.Thread, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t, ok := r.threads[id]
 	if !ok {
 		return domain.Thread{}, false, thread.ErrThreadNotFound
@@ -82,7 +107,7 @@ func (r *fakeRepo) UpdateStatus(_ context.Context, id string, from []domain.Thre
 			allowed = true
 		}
 	}
-	if !allowed {
+	if !allowed || (r.activateLosesRace && to == domain.ThreadStatusProcessing) {
 		return domain.Thread{}, false, nil
 	}
 	t.Status = to
@@ -91,34 +116,9 @@ func (r *fakeRepo) UpdateStatus(_ context.Context, id string, from []domain.Thre
 	return t, true, nil
 }
 
-func (r *fakeRepo) ActivatePaid(_ context.Context, id string, paidAt, freeUntil time.Time, previewText string) (domain.Thread, bool, error) {
-	t, ok := r.threads[id]
-	if !ok {
-		return domain.Thread{}, false, thread.ErrThreadNotFound
-	}
-	if t.Status != domain.ThreadStatusQueued || t.IsPaid {
-		return domain.Thread{}, false, nil
-	}
-	t.IsPaid = true
-	t.PaidAt = &paidAt
-	t.FreeUntil = &freeUntil
-	t.Status = domain.ThreadStatusProcessing
-	t.PreviewText = previewText
-	r.threads[id] = t
-	return t, true, nil
-}
-
-func (r *fakeRepo) CloseIfExpired(_ context.Context, id string, now time.Time) (bool, error) {
-	t, ok := r.threads[id]
-	if !ok || t.ClosedAt != nil {
-		return false, nil
-	}
-	t.ClosedAt = &now
-	r.threads[id] = t
-	return true, nil
-}
-
 func (r *fakeRepo) SoftDelete(_ context.Context, id string, now time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t, ok := r.threads[id]
 	if !ok || t.DeletedAt != nil {
 		return false, nil
@@ -129,6 +129,8 @@ func (r *fakeRepo) SoftDelete(_ context.Context, id string, now time.Time) (bool
 }
 
 func (r *fakeRepo) SetMessageFeedback(_ context.Context, messageID, sessionID string, feedback domain.MessageFeedback) (domain.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for threadID, msgs := range r.messages {
 		if r.threads[threadID].SessionID != sessionID {
 			continue
@@ -147,8 +149,11 @@ func (r *fakeRepo) SetMessageFeedback(_ context.Context, messageID, sessionID st
 // fakeBalance — in-memory реализация thread.BalanceService. DebitCredit
 // возвращает именно billing.ErrInsufficientBalance при нулевом балансе —
 // тот же сентинел, что и настоящий billing.Service (thread.Service явно
-// проверяет errors.Is по нему).
+// проверяет errors.Is по нему). Stage 9: RefundCredit теперь может
+// вызываться из фоновой горутины (finishWithError) конкурентно с чтением
+// из горутины теста — mu обязателен, та же причина, что у fakeRepo.
 type fakeBalance struct {
+	mu          sync.Mutex
 	credits     map[string]int
 	refunds     []refundCall
 	debitBroken bool // симулирует непредвиденную ошибку транспорта (не insufficient)
@@ -166,6 +171,8 @@ func newFakeBalance() *fakeBalance {
 func balanceKey(sessionID, serviceID string) string { return sessionID + "|" + serviceID }
 
 func (b *fakeBalance) DebitCredit(_ context.Context, sessionID, serviceID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.debitBroken {
 		return errors.New("fakeBalance: broken")
 	}
@@ -178,17 +185,31 @@ func (b *fakeBalance) DebitCredit(_ context.Context, sessionID, serviceID string
 }
 
 func (b *fakeBalance) RefundCredit(_ context.Context, sessionID, serviceID string, qty int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.refunds = append(b.refunds, refundCall{sessionID, serviceID, qty})
 	b.credits[balanceKey(sessionID, serviceID)] += qty
 	return nil
 }
 
 func (b *fakeBalance) GetBalance(_ context.Context, sessionID string) ([]domain.UserCredit, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	out := make([]domain.UserCredit, 0, 2)
 	for _, serviceID := range []string{"qa", "doc"} {
 		out = append(out, domain.UserCredit{ServiceID: serviceID, Quantity: b.credits[balanceKey(sessionID, serviceID)]})
 	}
 	return out, nil
+}
+
+// refundsSnapshot — доступ к refunds под mu (тесты читают его напрямую
+// после ожидания терминального статуса — waitForTerminal синхронизируется
+// через fakeRepo, не fakeBalance, поэтому чтение поля всё равно должно
+// идти через метод, а не напрямую).
+func (b *fakeBalance) refundsSnapshot() []refundCall {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]refundCall(nil), b.refunds...)
 }
 
 // fakeCatalog — in-memory реализация thread.ServiceCatalog.
@@ -238,22 +259,72 @@ func (f *fakeFileAttacher) AttachToMessage(_ context.Context, messageID string, 
 }
 
 // fakeAgent — thread.Agent с управляемым результатом/ошибкой для теста.
+// Stage 9: обработка теперь фоновая (dispatchProcessing) — Process
+// вызывается из горутины, отдельной от той, что читает/пишет result
+// (например, строка 549 переустанавливает result между CreateThread и
+// AddMessage) и от той, что проверяет lastRequests — result/lastRequests
+// под mu, доступ только через методы ниже (BACKEND_CODING_STANDARDS.md
+// §10 — тесты тоже не должны гонять данные под -race).
 type fakeAgent struct {
+	mu           sync.Mutex
 	result       thread.AgentResult
 	err          error
 	lastRequests []thread.AgentRequest
+
+	// deltas — если непусто, каждый элемент передаётся req.OnDelta по
+	// порядку перед тем, как Process вернёт результат (эмуляция Фазы 1
+	// streaming-вызова) — настраивается ДО того, как Process может быть
+	// вызван конкурентно (до CreateThread/AddMessage), поэтому без mu.
+	deltas []string
+	// block — если не nil, Process ждёт закрытия канала перед тем, как
+	// продолжить — тест "CreateThread возвращается до завершения агента"
+	// использует это, чтобы детерминированно застать тред в Processing.
+	// Настраивается до вызова CreateThread/AddMessage, без mu по той же
+	// причине, что deltas.
+	block chan struct{}
+	// panicWith — если не nil, Process паникует этим значением вместо
+	// обычного возврата (тест panic-recovery в dispatchProcessing).
+	// Настраивается до вызова CreateThread/AddMessage, без mu.
+	panicWith any
 }
 
 func newFakeAgent(result thread.AgentResult) *fakeAgent {
 	return &fakeAgent{result: result}
 }
 
+func (a *fakeAgent) setResult(result thread.AgentResult) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.result = result
+}
+
+func (a *fakeAgent) requestCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.lastRequests)
+}
+
 func (a *fakeAgent) Process(_ context.Context, req thread.AgentRequest) (thread.AgentResult, error) {
+	a.mu.Lock()
 	a.lastRequests = append(a.lastRequests, req)
-	if a.err != nil {
-		return thread.AgentResult{}, a.err
+	result, err := a.result, a.err
+	a.mu.Unlock()
+
+	if a.block != nil {
+		<-a.block
 	}
-	return a.result, nil
+	if a.panicWith != nil {
+		panic(a.panicWith)
+	}
+	if req.OnDelta != nil {
+		for _, d := range a.deltas {
+			req.OnDelta(d)
+		}
+	}
+	if err != nil {
+		return thread.AgentResult{}, err
+	}
+	return result, nil
 }
 
 const (
@@ -261,12 +332,63 @@ const (
 	otherSessionID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 )
 
+// fakeEventPublisher — thread.EventPublisher с записью всех вызовов
+// (Stage 9) — mutex-guarded, вызывается из фоновой горутины
+// (dispatchProcessing), читается из горутины теста.
+type fakeEventPublisher struct {
+	mu     sync.Mutex
+	events []publishedEvent
+}
+
+type publishedEvent struct {
+	kind     string // "status" | "answer_delta" | "answer_done" | "error"
+	threadID string
+	status   domain.ThreadStatus
+	delta    string
+	code     string
+}
+
+func newFakeEventPublisher() *fakeEventPublisher {
+	return &fakeEventPublisher{}
+}
+
+func (p *fakeEventPublisher) record(ev publishedEvent) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, ev)
+}
+
+func (p *fakeEventPublisher) all() []publishedEvent {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]publishedEvent, len(p.events))
+	copy(out, p.events)
+	return out
+}
+
+func (p *fakeEventPublisher) PublishStatus(_ context.Context, threadID string, status domain.ThreadStatus, _ string) {
+	p.record(publishedEvent{kind: "status", threadID: threadID, status: status})
+}
+
+func (p *fakeEventPublisher) PublishAnswerDelta(_ context.Context, threadID string, delta string) {
+	p.record(publishedEvent{kind: "answer_delta", threadID: threadID, delta: delta})
+}
+
+func (p *fakeEventPublisher) PublishAnswerDone(_ context.Context, threadID string, _ domain.Message, status domain.ThreadStatus) {
+	p.record(publishedEvent{kind: "answer_done", threadID: threadID, status: status})
+}
+
+func (p *fakeEventPublisher) PublishError(_ context.Context, threadID string, code, _ string) {
+	p.record(publishedEvent{kind: "error", threadID: threadID, code: code})
+}
+
 type testSetup struct {
 	repo    *fakeRepo
 	balance *fakeBalance
 	catalog *fakeCatalog
 	files   *fakeFileAttacher
 	agent   *fakeAgent
+	events  *fakeEventPublisher
 	svc     *thread.Service
 	now     time.Time
 }
@@ -276,13 +398,39 @@ func newTestSetup(agent *fakeAgent, ids []string) *testSetup {
 	bal := newFakeBalance()
 	cat := newFakeCatalog()
 	files := newFakeFileAttacher()
+	events := newFakeEventPublisher()
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	svc := thread.New(repo, bal, cat, files, agent, clock.Fake{T: now}, &idgen.Fake{IDs: ids}, 72*time.Hour)
-	return &testSetup{repo: repo, balance: bal, catalog: cat, files: files, agent: agent, svc: svc, now: now}
+	svc := thread.New(repo, bal, cat, files, agent, events, clock.Fake{T: now}, &idgen.Fake{IDs: ids})
+	return &testSetup{repo: repo, balance: bal, catalog: cat, files: files, agent: agent, events: events, svc: svc, now: now}
 }
 
-func TestCreateThread_SufficientBalance_ProcessesSynchronouslyToDone(t *testing.T) {
-	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "Ваш ответ готов.", Sources: []domain.Source{}})
+// waitForTerminal — Stage 9: CreateThread/AddMessage/Resume
+// возвращаются сразу после перехода в Processing, реальное завершение
+// раунда (Done/Error) происходит в фоновой горутине
+// (dispatchProcessing). fakeAgent не делает реального I/O — раунд с ним
+// завершается почти мгновенно, короткий poll-интервал здесь не признак
+// хрупкости теста, а просто ожидание планировщика горутин.
+func waitForTerminal(t *testing.T, repo *fakeRepo, threadID string) domain.Thread {
+	t.Helper()
+	var final domain.Thread
+	require.Eventually(t, func() bool {
+		th, err := repo.GetByID(context.Background(), threadID)
+		if err != nil {
+			return false
+		}
+		final = th
+		return th.Status != domain.ThreadStatusProcessing
+	}, 2*time.Second, time.Millisecond, "thread never left Processing")
+	return final
+}
+
+// TestCreateThread_SufficientBalance_ReturnsProcessingThenFinishesToDoneInBackground —
+// Stage 9: обработка фоновая (dispatchProcessing) — CreateThread возвращается
+// сразу после перехода AwaitingPayment -> Processing, без ответа ассистента; финальный
+// переход в Done и само сообщение появляются асинхронно (проверяется через
+// repo, как их увидел бы WS-подписчик/повторный GET /threads/{id}).
+func TestCreateThread_SufficientBalance_ReturnsProcessingThenFinishesToDoneInBackground(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "Ваш ответ готов."})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
 	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
 
@@ -295,14 +443,15 @@ func TestCreateThread_SufficientBalance_ProcessesSynchronouslyToDone(t *testing.
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusDone, got.Status)
-	require.True(t, got.IsPaid)
-	require.NotNil(t, got.PaidAt)
-	require.NotNil(t, got.FreeUntil)
+	require.Equal(t, domain.ThreadStatusProcessing, got.Status, "возвращается сразу после перехода в Processing, не дожидаясь агента")
 	require.Equal(t, "Как оформить развод?", got.Title)
-	require.Equal(t, "Ваш ответ готов.", got.PreviewText)
-	require.Equal(t, 2, got.MessageCount) // пользователь + ассистент
-	require.Len(t, setup.agent.lastRequests, 1)
+	require.Equal(t, 1, got.MessageCount, "ответ ассистента ещё не сгенерирован")
+
+	final := waitForTerminal(t, setup.repo, got.ID)
+	require.Equal(t, domain.ThreadStatusDone, final.Status)
+	require.Equal(t, "Ваш ответ готов.", final.PreviewText)
+	require.Equal(t, 2, final.MessageCount) // пользователь + ассистент
+	require.Equal(t, 1, setup.agent.requestCount())
 
 	msgs, err := setup.repo.GetMessages(context.Background(), got.ID)
 	require.NoError(t, err)
@@ -337,12 +486,13 @@ func TestCreateThread_SetsProcessingTimeMsOnAssistantMessage(t *testing.T) {
 	bal := newFakeBalance()
 	bal.credits[balanceKey(testSessionID, "qa")] = 1
 	clk := &steppingClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), step: 250 * time.Millisecond}
-	svc := thread.New(repo, bal, newFakeCatalog(), newFakeFileAttacher(), agent, clk, &idgen.Fake{IDs: []string{"thread-1", "msg-user-1", "msg-assistant-1"}}, 72*time.Hour)
+	svc := thread.New(repo, bal, newFakeCatalog(), newFakeFileAttacher(), agent, newFakeEventPublisher(), clk, &idgen.Fake{IDs: []string{"thread-1", "msg-user-1", "msg-assistant-1"}})
 
 	got, err := svc.CreateThread(context.Background(), thread.CreateThreadRequest{
 		SessionID: testSessionID, Language: domain.LanguageRu, ServiceID: "qa", Text: "Вопрос", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
+	waitForTerminal(t, repo, got.ID)
 
 	msgs, err := repo.GetMessages(context.Background(), got.ID)
 	require.NoError(t, err)
@@ -352,33 +502,7 @@ func TestCreateThread_SetsProcessingTimeMsOnAssistantMessage(t *testing.T) {
 	require.Positive(t, *msgs[1].ProcessingTimeMs)
 }
 
-func TestCreateThread_UnverifiedSources_PropagatesToSavedMessage(t *testing.T) {
-	agent := newFakeAgent(thread.AgentResult{
-		Status:            thread.AgentResultDone,
-		AnswerText:        "Ответ со спорным источником.",
-		Sources:           []domain.Source{{Ref: "ст. 999 Придуманного кодекса", Quote: "x"}},
-		UnverifiedSources: true,
-	})
-	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
-	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
-
-	got, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
-		SessionID: testSessionID,
-		Language:  domain.LanguageRu,
-		ServiceID: "qa",
-		Text:      "Вопрос",
-		InputType: domain.MessageInputTypeText,
-	})
-	require.NoError(t, err)
-
-	msgs, err := setup.repo.GetMessages(context.Background(), got.ID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	require.False(t, msgs[0].UnverifiedSources, "user message is never unverified")
-	require.True(t, msgs[1].UnverifiedSources)
-}
-
-func TestCreateThread_InsufficientBalance_CreatesQueuedUnpaid(t *testing.T) {
+func TestCreateThread_InsufficientBalance_CreatesAwaitingPayment(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "не должно вызваться"})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1"})
 
@@ -391,11 +515,8 @@ func TestCreateThread_InsufficientBalance_CreatesQueuedUnpaid(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusQueued, got.Status)
-	require.False(t, got.IsPaid)
-	require.Nil(t, got.PaidAt)
-	require.Nil(t, got.FreeUntil)
-	require.Empty(t, setup.agent.lastRequests, "агент не должен вызываться для неоплаченного треда")
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, got.Status)
+	require.Equal(t, 0, setup.agent.requestCount(), "агент не должен вызываться для неоплаченного треда")
 }
 
 func TestCreateThread_UnknownService_ReturnsServiceNotFound(t *testing.T) {
@@ -459,7 +580,8 @@ func TestCreateThread_Voice_AcceptsAlreadyTranscribedText(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusDone, got.Status)
+	final := waitForTerminal(t, setup.repo, got.ID)
+	require.Equal(t, domain.ThreadStatusDone, final.Status)
 }
 
 // TestCreateThread_File_RequiresEitherTextOrFiles — input_type=file без
@@ -527,50 +649,85 @@ func TestCreateThread_AgentError_MarksErrorAndRefundsCredit(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusError, got.Status)
-	require.Len(t, setup.balance.refunds, 1)
-	require.Equal(t, refundCall{testSessionID, "qa", 1}, setup.balance.refunds[0])
+	final := waitForTerminal(t, setup.repo, got.ID)
+	require.Equal(t, domain.ThreadStatusError, final.Status)
+
+	// finishWithError возвращает кредит ПОСЛЕ перехода статуса в Error
+	// (см. thread.go) — waitForTerminal ловит момент смены статуса, но
+	// RefundCredit может доехать на пару инструкций позже той же горутины,
+	// отдельный короткий Eventually на сам факт возврата.
+	require.Eventually(t, func() bool {
+		return len(setup.balance.refundsSnapshot()) == 1
+	}, 2*time.Second, time.Millisecond)
+	refunds := setup.balance.refundsSnapshot()
+	require.Equal(t, refundCall{testSessionID, "qa", 1}, refunds[0])
 	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
 	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 1}) // списали и тут же вернули
 }
 
-func TestAddMessage_WithinFreeUntil_ContinuesThreadWithoutNewDebit(t *testing.T) {
+// TestAddMessage_OnDoneThread_IsNewPaidConsultation — один вопрос = одна
+// консультация: новый вопрос в отвеченном треде списывает ещё одну единицу.
+func TestAddMessage_OnDoneThread_IsNewPaidConsultation(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "первый ответ"})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1", "msg-user-2", "msg-assistant-2"})
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 2
+
+	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
+		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос 1", InputType: domain.MessageInputTypeText,
+	})
+	require.NoError(t, err)
+	created = waitForTerminal(t, setup.repo, created.ID)
+	require.Equal(t, domain.ThreadStatusDone, created.Status)
+
+	agent.setResult(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "второй ответ"})
+	updated, err := setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
+		ThreadID: created.ID, SessionID: testSessionID, Text: "вопрос 2", InputType: domain.MessageInputTypeText,
+	})
+	require.NoError(t, err)
+	require.Equal(t, domain.ThreadStatusProcessing, updated.Status, "AddMessage тоже возвращается сразу, не дожидаясь агента")
+
+	final := waitForTerminal(t, setup.repo, updated.ID)
+	require.Equal(t, domain.ThreadStatusDone, final.Status)
+	require.Equal(t, 4, final.MessageCount)
+	require.Equal(t, "второй ответ", final.PreviewText)
+
+	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
+	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 0}, "за каждый вопрос — одна единица")
+}
+
+func TestAddMessage_OnDoneThreadWithoutBalance_AwaitsPayment(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "первый ответ"})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1", "msg-user-2"})
 	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
 
 	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос 1", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusDone, created.Status)
+	created = waitForTerminal(t, setup.repo, created.ID)
 
-	agent.result = thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "уточнение готово"}
-	updated, err := setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
-		ThreadID: created.ID, SessionID: testSessionID, Text: "уточняющий вопрос", InputType: domain.MessageInputTypeText,
+	got, err := setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
+		ThreadID: created.ID, SessionID: testSessionID, Text: "вопрос 2", InputType: domain.MessageInputTypeText,
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusDone, updated.Status)
-	require.Equal(t, 4, updated.MessageCount)
-	require.Equal(t, "уточнение готово", updated.PreviewText)
-
-	// Баланс не списан повторно — бесплатное уточнение (§4.3).
-	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
-	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 0})
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, got.Status)
+	require.Equal(t, 3, got.MessageCount, "вопрос сохранён, ждёт оплаты")
+	require.Equal(t, 1, agent.requestCount())
 }
 
-// TestAddMessage_WithFileIDs_AttachesToNewMessage — уточнение с вложением
+// TestAddMessage_WithFileIDs_AttachesToNewMessage — новый вопрос с вложением
 // (input_type=file, без текста) внутри уже открытого треда (Stage 4).
 func TestAddMessage_WithFileIDs_AttachesToNewMessage(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "первый ответ"})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1", "msg-user-2", "msg-assistant-2"})
-	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 2
 
 	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос 1", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
+	created = waitForTerminal(t, setup.repo, created.ID) // иначе AddMessage ниже попадёт на ErrThreadBusy (тред ещё Processing)
 
 	setup.files.available["file-1"] = testSessionID
 	_, err = setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
@@ -585,43 +742,47 @@ func TestAddMessage_WithFileIDs_AttachesToNewMessage(t *testing.T) {
 	require.Equal(t, []string{"file-1"}, setup.files.attached[secondUserMsg.ID])
 }
 
-func TestAddMessage_AfterFreeUntilExpired_ReturnsClosedAndClosesThread(t *testing.T) {
-	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "первый ответ"})
-	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
-	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
-
+// createAwaitingThread — неоплаченный тред: баланса на момент создания нет.
+func createAwaitingThread(t *testing.T, setup *testSetup) domain.Thread {
+	t.Helper()
 	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
-		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
+		SessionID: testSessionID, Language: domain.LanguageRu, ServiceID: "qa", Text: "вопрос без баланса", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
-
-	future := setup.now.Add(73 * time.Hour) // free_until = now + 72h
-	svcLater := thread.New(setup.repo, setup.balance, setup.catalog, setup.files, agent, clock.Fake{T: future}, &idgen.Fake{}, 72*time.Hour)
-
-	_, err = svcLater.AddMessage(context.Background(), thread.AddMessageRequest{
-		ThreadID: created.ID, SessionID: testSessionID, Text: "поздно", InputType: domain.MessageInputTypeText,
-	})
-	require.ErrorIs(t, err, thread.ErrThreadClosed)
-
-	closedThread, closeErr := setup.repo.GetByID(context.Background(), created.ID)
-	require.NoError(t, closeErr)
-	require.NotNil(t, closedThread.ClosedAt)
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, created.Status)
+	return created
 }
 
-func TestAddMessage_OnQueuedUnpaidThread_ReturnsPaymentRequired(t *testing.T) {
+func TestAddMessage_OnAwaitingPaymentWithoutBalance_SavesMessageAndStaysAwaiting(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{})
-	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1"})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-user-2"})
+	created := createAwaitingThread(t, setup)
 
-	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
-		SessionID: testSessionID, ServiceID: "qa", Text: "без баланса", InputType: domain.MessageInputTypeText,
+	got, err := setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
+		ThreadID: created.ID, SessionID: testSessionID, Text: "новый вопрос", InputType: domain.MessageInputTypeText,
 	})
+
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusQueued, created.Status)
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, got.Status)
+	require.Equal(t, 2, got.MessageCount, "новый вопрос сохраняется и без оплаты")
+	require.Equal(t, 0, agent.requestCount())
+}
 
-	_, err = setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
-		ThreadID: created.ID, SessionID: testSessionID, Text: "ещё", InputType: domain.MessageInputTypeText,
+func TestAddMessage_OnAwaitingPaymentWithBalance_DebitsAndProcesses(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "ответ"})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-user-2", "msg-assistant-1"})
+	created := createAwaitingThread(t, setup)
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1 // пополнил баланс в «Тарифах»
+
+	got, err := setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
+		ThreadID: created.ID, SessionID: testSessionID, Text: "новый вопрос", InputType: domain.MessageInputTypeText,
 	})
-	require.ErrorIs(t, err, thread.ErrPaymentRequired)
+
+	require.NoError(t, err)
+	require.Equal(t, domain.ThreadStatusProcessing, got.Status)
+	require.Equal(t, domain.ThreadStatusDone, waitForTerminal(t, setup.repo, got.ID).Status)
+	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
+	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 0})
 }
 
 func TestAddMessage_OnErrorThread_ReturnsNotActive(t *testing.T) {
@@ -633,6 +794,7 @@ func TestAddMessage_OnErrorThread_ReturnsNotActive(t *testing.T) {
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
+	created = waitForTerminal(t, setup.repo, created.ID)
 	require.Equal(t, domain.ThreadStatusError, created.Status)
 
 	_, err = setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
@@ -657,27 +819,53 @@ func TestAddMessage_ForeignSession_ReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, thread.ErrThreadNotFound)
 }
 
-func TestActivateAfterPayment_ActivatesQueuedThreadAndProcesses(t *testing.T) {
+func TestResume_WithBalance_DebitsAndProcessesSavedQuestion(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "готово после оплаты"})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
+	created := createAwaitingThread(t, setup)
 
-	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
-		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос без баланса", InputType: domain.MessageInputTypeText,
-	})
-	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusQueued, created.Status)
-
-	// Баланс появился (эмуляция billing.ConfirmPayment{thread_id}).
+	// Баланс появился (пополнение в «Тарифах» или confirm{thread_id}).
 	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
 
-	activated, err := setup.svc.ActivateAfterPayment(context.Background(), created.ID, testSessionID, domain.LanguageRu)
+	activated, err := setup.svc.Resume(context.Background(), created.ID, testSessionID, domain.LanguageRu)
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusDone, activated.Status)
-	require.True(t, activated.IsPaid)
-	require.NotNil(t, activated.FreeUntil)
+	require.Equal(t, domain.ThreadStatusProcessing, activated.Status, "возвращается сразу, не дожидаясь агента")
+
+	final := waitForTerminal(t, setup.repo, activated.ID)
+	require.Equal(t, domain.ThreadStatusDone, final.Status)
+	require.Equal(t, 2, final.MessageCount, "ответ на уже сохранённый вопрос, без нового сообщения")
+	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
+	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 0}, "единица списана с баланса")
 }
 
-func TestActivateAfterPayment_AlreadyActivated_IsIdempotent(t *testing.T) {
+func TestResume_WithoutBalance_StaysAwaitingPayment(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1"})
+	created := createAwaitingThread(t, setup)
+
+	got, err := setup.svc.Resume(context.Background(), created.ID, testSessionID, domain.LanguageRu)
+
+	require.NoError(t, err)
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, got.Status)
+	require.Equal(t, 0, agent.requestCount())
+}
+
+func TestResume_LostActivationRace_RefundsDebitedCredit(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1"})
+	created := createAwaitingThread(t, setup)
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
+	setup.repo.activateLosesRace = true
+
+	_, err := setup.svc.Resume(context.Background(), created.ID, testSessionID, domain.LanguageRu)
+
+	require.NoError(t, err)
+	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
+	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 1}, "списанная единица вернулась")
+	require.Equal(t, 0, agent.requestCount())
+}
+
+func TestResume_NotAwaitingPayment_IsNoOp(t *testing.T) {
 	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "готово"})
 	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
 	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
@@ -686,15 +874,19 @@ func TestActivateAfterPayment_AlreadyActivated_IsIdempotent(t *testing.T) {
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
-	require.True(t, created.IsPaid)
+	require.Equal(t, domain.ThreadStatusProcessing, created.Status)
+	created = waitForTerminal(t, setup.repo, created.ID)
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1 // например, доплата за другой тред
 
-	again, err := setup.svc.ActivateAfterPayment(context.Background(), created.ID, testSessionID, domain.LanguageRu)
+	again, err := setup.svc.Resume(context.Background(), created.ID, testSessionID, domain.LanguageRu)
 	require.NoError(t, err)
 	require.Equal(t, created.Status, again.Status)
-	require.Len(t, agent.lastRequests, 1, "повторная активация не должна снова вызывать агента")
+	require.Equal(t, 1, agent.requestCount(), "повторная активация не должна снова вызывать агента")
+	balance, _ := setup.balance.GetBalance(context.Background(), testSessionID)
+	require.Contains(t, balance, domain.UserCredit{ServiceID: "qa", Quantity: 1}, "no-op не списывает баланс")
 }
 
-func TestCancelThread_FromQueued_Succeeds(t *testing.T) {
+func TestCancelThread_FromAwaitingPayment_Succeeds(t *testing.T) {
 	setup := newTestSetup(newFakeAgent(thread.AgentResult{}), []string{"thread-1", "msg-user-1"})
 
 	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
@@ -716,6 +908,7 @@ func TestCancelThread_FromDone_Rejected(t *testing.T) {
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
+	created = waitForTerminal(t, setup.repo, created.ID)
 	require.Equal(t, domain.ThreadStatusDone, created.Status)
 
 	_, err = setup.svc.CancelThread(context.Background(), created.ID, testSessionID)
@@ -748,6 +941,7 @@ func TestSetMessageFeedback_UpdatesMessage(t *testing.T) {
 		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
 	})
 	require.NoError(t, err)
+	waitForTerminal(t, setup.repo, created.ID)
 
 	_, msgs, err := setup.svc.GetThread(context.Background(), created.ID, testSessionID)
 	require.NoError(t, err)
@@ -758,4 +952,121 @@ func TestSetMessageFeedback_UpdatesMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated.Feedback)
 	require.Equal(t, domain.MessageFeedbackLike, *updated.Feedback)
+}
+
+// --- Stage 9: фоновая обработка + WS-события (dispatchProcessing,
+// EventPublisher) ---
+
+// TestCreateThread_ReturnsBeforeAgentFinishes — ключевое поведение Stage 9:
+// CreateThread не блокируется на Agent.Process. fakeAgent.block держит
+// Process заблокированным, пока тест явно не отпустит его — если бы
+// CreateThread всё ещё был синхронным, сам вызов CreateThread завис бы
+// на этом канале и тест бы не дошёл до строки ниже за отведённый таймаут.
+func TestCreateThread_ReturnsBeforeAgentFinishes(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "готово"})
+	agent.block = make(chan struct{})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1"})
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
+
+	done := make(chan domain.Thread, 1)
+	go func() {
+		got, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
+			SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
+		})
+		require.NoError(t, err)
+		done <- got
+	}()
+
+	var got domain.Thread
+	select {
+	case got = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CreateThread не вернулся — похоже, он всё ещё ждёт Agent.Process синхронно")
+	}
+	require.Equal(t, domain.ThreadStatusProcessing, got.Status)
+	require.Equal(t, 1, got.MessageCount, "сообщение ассистента ещё не создано")
+
+	close(agent.block) // отпускаем Process — раунд теперь может завершиться
+	final := waitForTerminal(t, setup.repo, got.ID)
+	require.Equal(t, domain.ThreadStatusDone, final.Status)
+}
+
+// TestAddMessage_PublishesStatusThenDeltasThenDone_InOrder — WS-события
+// (internal/wshub.Hub в проде, fakeEventPublisher здесь) публикуются в
+// строгом порядке: processing -> дельты Фазы 1 (в порядке генерации) ->
+// answer_done. Порядок важен клиенту (WS-подписчик рендерит стрим по мере
+// прихода) — тест фиксирует его как контракт thread.Service, а не деталь
+// реализации.
+func TestAddMessage_PublishesStatusThenDeltasThenDone_InOrder(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "первый ответ"})
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1", "msg-assistant-1", "msg-user-2", "msg-assistant-2"})
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 2 // два вопроса — две консультации
+
+	created, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
+		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос 1", InputType: domain.MessageInputTypeText,
+	})
+	require.NoError(t, err)
+	created = waitForTerminal(t, setup.repo, created.ID)
+	require.Equal(t, domain.ThreadStatusDone, created.Status)
+
+	agent.deltas = []string{"Прив", "ет, ", "мир"}
+	agent.setResult(thread.AgentResult{Status: thread.AgentResultDone, AnswerText: "Привет, мир"})
+	_, err = setup.svc.AddMessage(context.Background(), thread.AddMessageRequest{
+		ThreadID: created.ID, SessionID: testSessionID, Text: "вопрос 2", InputType: domain.MessageInputTypeText,
+	})
+	require.NoError(t, err)
+	waitForTerminal(t, setup.repo, created.ID)
+
+	// Оставляем только события ВТОРОГО раунда (после первого Done) — ищем
+	// первое answer_done и берём всё после него.
+	all := setup.events.all()
+	firstDoneIdx := -1
+	for i, ev := range all {
+		if ev.kind == "answer_done" {
+			firstDoneIdx = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, firstDoneIdx, 0)
+	roundTwo := all[firstDoneIdx+1:]
+
+	require.NotEmpty(t, roundTwo)
+	require.Equal(t, "status", roundTwo[0].kind)
+	require.Equal(t, domain.ThreadStatusProcessing, roundTwo[0].status)
+
+	var deltas []string
+	for _, ev := range roundTwo[1:] {
+		if ev.kind == "answer_delta" {
+			deltas = append(deltas, ev.delta)
+		}
+	}
+	require.Equal(t, []string{"Прив", "ет, ", "мир"}, deltas)
+
+	last := roundTwo[len(roundTwo)-1]
+	require.Equal(t, "answer_done", last.kind)
+	require.Equal(t, domain.ThreadStatusDone, last.status)
+}
+
+// TestRunAgentAndFinish_PanicInAgentIsRecoveredAndMarksThreadError —
+// паника внутри Agent.Process (фоновая горутина, dispatchProcessing) не
+// должна уронить процесс и не должна оставить тред зависшим в Processing
+// навсегда — recover переводит его в Error тем же путём, что обычный сбой
+// агента, включая возврат кредита.
+func TestRunAgentAndFinish_PanicInAgentIsRecoveredAndMarksThreadError(t *testing.T) {
+	agent := newFakeAgent(thread.AgentResult{})
+	agent.panicWith = "boom: simulated agent panic"
+	setup := newTestSetup(agent, []string{"thread-1", "msg-user-1"})
+	setup.balance.credits[balanceKey(testSessionID, "qa")] = 1
+
+	got, err := setup.svc.CreateThread(context.Background(), thread.CreateThreadRequest{
+		SessionID: testSessionID, ServiceID: "qa", Text: "вопрос", InputType: domain.MessageInputTypeText,
+	})
+	require.NoError(t, err, "CreateThread сам по себе не должен видеть панику — она внутри фоновой горутины")
+
+	final := waitForTerminal(t, setup.repo, got.ID)
+	require.Equal(t, domain.ThreadStatusError, final.Status, "паника должна деградировать до обычного error-пути, не оставлять Processing")
+
+	require.Eventually(t, func() bool {
+		return len(setup.balance.refundsSnapshot()) == 1
+	}, 2*time.Second, time.Millisecond, "кредит должен вернуться даже при панике агента")
 }

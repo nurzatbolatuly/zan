@@ -14,9 +14,10 @@ MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.docu
 MIME_PNG = "image/png"
 MIME_JPEG = "image/jpeg"
 
-# SUPPORTED_MIME_TYPES — зеркалит file.AllowedMimeTypes на стороне Go
-# (backend/internal/service/file/file.go) — Go уже отклоняет всё остальное
-# на POST /files/upload, это проверка defense-in-depth, не первичная линия.
+# SUPPORTED_MIME_TYPES — зеркалит file.extractableMimeTypes на стороне Go
+# (backend/internal/service/file/file.go) — загрузить можно файл любого типа,
+# но Go не вызывает Extract для остальных; это проверка defense-in-depth,
+# не первичная линия.
 SUPPORTED_MIME_TYPES = frozenset({MIME_PDF, MIME_DOCX, MIME_PNG, MIME_JPEG})
 
 

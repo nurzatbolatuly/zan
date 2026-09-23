@@ -6,17 +6,16 @@
  * тарифов — по сути один и тот же набор сущностей с двух сторон) используют
  * общий тип (FRONT_CODING_STANDARDS.md §5).
  *
- * Открытый `string`, не закрытый union — Settings→Tariffs (Stage 4b) даёт
- * админу создавать произвольные услуги (`crypto.randomUUID()` как id, тот же
- * приём, что уже используют новые тарифы в `useAdminTariffs.ts#saveBundle`),
- * до появления настоящего бэка (Stage 6) это фронтовая генерация id, не
- * контракт. Два "встроенных" id — `"qa"`/`"doc"` — остаются как сид-данные
- * (`features/settings/mocks.ts#SERVICE_MOCKS`), но не как единственно
- * возможные значения. Публичная страница `/tariffs` (Stage 3) намеренно
- * работает только с этими двумя — см. `features/tariffs/types.ts#BuiltInServiceId`
- * (более узкий локальный алиас, не этот тип).
+ * Закрытый union, 1:1 с `openapi.yaml#ServiceId` (Stage 6) — до реального
+ * бэка это был открытый `string` (Settings→Tariffs позволял создавать
+ * произвольные услуги с `crypto.randomUUID()`-id), но реальный каталог
+ * заведён миграцией и ограничен ровно этими двумя значениями: бэк не даёт
+ * ни создавать, ни удалять услугу (`PUT /admin/services/{id}` — только
+ * `price`/`is_active` для уже существующей), значит и на фронте это больше
+ * не может быть открытым типом. `features/tariffs/types.ts#BuiltInServiceId`
+ * стал избыточен как отдельный более узкий алиас — они теперь совпадают.
  */
-export type ServiceId = string;
+export type ServiceId = "qa" | "doc";
 
 export type PriceTable = Record<ServiceId, number>;
 

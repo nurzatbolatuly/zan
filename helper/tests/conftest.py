@@ -17,7 +17,7 @@ def _reset_structlog_config() -> Iterator[None]:
     — capsys подменяет sys.stdout только на время своего теста, дальше поток
     закрывается. Без сброса конфигурация "протекает" в любой следующий тест,
     где код логирует через уже глобально закешированный logger (structlog
-    cache_logger_on_first_use=True) — обнаружено на tests/test_rag_servicer.py
+    cache_logger_on_first_use=True) — обнаружено на тестах gRPC-сервисеров
     (async grpc-интерцептор логирует после того, как test_logging.py уже
     переконфигурировал structlog в предыдущем тесте), падало с "I/O operation
     on closed file". reset_defaults() возвращает structlog к ленивой

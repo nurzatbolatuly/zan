@@ -21,7 +21,6 @@ import (
 	"zan-backend/internal/grpcclient"
 	"zan-backend/internal/httpserver"
 	"zan-backend/internal/platform/bruteforce"
-	"zan-backend/internal/platform/clamav"
 	"zan-backend/internal/platform/clock"
 	"zan-backend/internal/platform/idgen"
 	"zan-backend/internal/platform/logger"
@@ -39,6 +38,7 @@ import (
 	"zan-backend/internal/service/session"
 	"zan-backend/internal/service/thread"
 	"zan-backend/internal/service/voice"
+	"zan-backend/internal/wshub"
 )
 
 // helperBreakerConfig — один circuit breaker на весь клиент к helper/
@@ -179,35 +179,40 @@ func run() error {
 		repo.NewFileRepo(pool),
 		s3Client,
 		helperClient,
-		clamav.New(cfg.ClamAVAddr, cfg.ClamAVTimeout),
+		file.NoopAVScanner{},
 		clock.Real{},
 		idgen.UUIDGenerator{},
 		cfg.FileMaxSizeBytes,
 	)
 	voiceSvc := voice.New(s3Client, helperClient, clock.Real{}, idgen.UUIDGenerator{}, cfg.VoiceMaxSizeBytes)
 	promptSvc := prompt.New(repo.NewPromptRepo(pool), clock.Real{})
-	// agent.NewClient(...) — Stage 5, заменяет thread.NewStubAgent() (Stage 3)
-	// за тем же портом thread.Agent, без изменений в остальной сборке
-	// зависимостей (Strategy, BACKEND_PLAN.md). helperClient (*grpcclient.Client)
-	// удовлетворяет agent.RagSearcher структурно, promptSvc — agent.PromptProvider.
-	agentClient := agent.NewClient(promptSvc, helperClient, agent.Config{
-		BaseURL:     cfg.OpenAIBaseURL,
-		APIKey:      cfg.OpenAIAPIKey,
-		Model:       cfg.OpenAIModel,
-		MaxTokens:   cfg.OpenAIMaxTokens,
-		HTTPTimeout: cfg.LLMTimeout,
-		RagTopK:     cfg.RagTopK,
-		Breaker:     llmBreakerConfig,
+	// agentClient — прямой вызов OpenAI (промпт из БД + история треда),
+	// реализует thread.Agent и document.Generator; promptSvc удовлетворяет
+	// agent.PromptProvider, s3Client — agent.FileLoader (PDF/изображения
+	// вопроса уходят модели целиком) структурно.
+	agentClient := agent.NewClient(promptSvc, s3Client, agent.Config{
+		BaseURL:           cfg.OpenAIBaseURL,
+		APIKey:            cfg.OpenAIAPIKey,
+		Model:             cfg.OpenAIModel,
+		MaxTokens:         cfg.OpenAIMaxTokens,
+		ReasoningEffort:   cfg.OpenAIReasoningEffort,
+		HTTPTimeout:       cfg.LLMTimeout,
+		Breaker:           llmBreakerConfig,
+		StreamHTTPTimeout: cfg.LLMStreamTimeout,
 	})
+	// wsHub — Stage 9, WS-стриминг статуса и токенов ответа (GET /ws/threads/{id}
+	// — internal/httpserver/ws_thread.go), один экземпляр на процесс, собран
+	// здесь (composition root), не package-level var (BACKEND_CODING_STANDARDS.md §2).
+	wsHub := wshub.NewHub()
 	threadSvc := thread.New(
 		repo.NewThreadRepo(pool),
 		billingSvc,
 		catalogSvc,
 		fileSvc,
 		agentClient,
+		wsHub,
 		clock.Real{},
 		idgen.UUIDGenerator{},
-		cfg.ThreadFreeUntil,
 	)
 	// documentSvc — Stage 6 ("Агент 'Документы'"): собственные экземпляры
 	// repo.NewThreadRepo/repo.NewFileRepo (тонкие обёртки над тем же pool,
@@ -235,6 +240,7 @@ func run() error {
 		Catalog:           catalogSvc,
 		Billing:           billingSvc,
 		Thread:            threadSvc,
+		Hub:               wsHub,
 		Documents:         documentSvc,
 		Files:             fileSvc,
 		Voice:             voiceSvc,
@@ -243,8 +249,8 @@ func run() error {
 		ClientLogs:        clientLogSvc,
 		FileMaxSizeBytes:  cfg.FileMaxSizeBytes,
 		VoiceMaxSizeBytes: cfg.VoiceMaxSizeBytes,
-		// Secure-cookie требует HTTPS — в dev локальный стек поднят по
-		// голому HTTP (docker-compose), браузер такую cookie не примет.
+		// Secure-cookie требует HTTPS — в dev бэкенд слушает голый HTTP,
+		// браузер такую cookie не примет.
 		AdminToken:             cfg.AdminToken,
 		SessionCookieSecure:    cfg.Env != "dev",
 		SessionRateLimit:       ratelimit.NewStore(sessionCreateRatePerSecond, sessionCreateRateBurst),

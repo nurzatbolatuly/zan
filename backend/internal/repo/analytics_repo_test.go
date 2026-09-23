@@ -13,7 +13,7 @@ import (
 
 // TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages — Stage 7
 // (BACKEND_PLAN.md): total_threads/status_breakdown/avg_processing_time_sec/
-// satisfaction_rate на реальных данных — done+error+queued треды, оценённые
+// satisfaction_rate на реальных данных — done+error+awaiting_payment треды, оценённые
 // и неоценённые ответы ассистента, soft-deleted тред исключён из всего.
 func TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages(t *testing.T) {
 	pool := setupTestDB(t)
@@ -30,7 +30,7 @@ func TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages(t *testing
 		newTestThread("22222222-9999-9999-9999-999999999999", sess.ID, now),
 		newTestUserMessage("33333333-9999-9999-9999-999999999999", now))
 	require.NoError(t, err)
-	_, ok, err := threadRepo.UpdateStatus(context.Background(), t1.ID, []domain.ThreadStatus{domain.ThreadStatusQueued}, domain.ThreadStatusProcessing, "processing")
+	_, ok, err := threadRepo.UpdateStatus(context.Background(), t1.ID, []domain.ThreadStatus{domain.ThreadStatusAwaitingPayment}, domain.ThreadStatusProcessing, "processing")
 	require.NoError(t, err)
 	require.True(t, ok)
 	processingMs1 := 2000
@@ -53,7 +53,7 @@ func TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages(t *testing
 		newTestThread("55555555-9999-9999-9999-999999999999", sess.ID, now),
 		newTestUserMessage("66666666-9999-9999-9999-999999999999", now))
 	require.NoError(t, err)
-	_, ok, err = threadRepo.UpdateStatus(context.Background(), t2.ID, []domain.ThreadStatus{domain.ThreadStatusQueued}, domain.ThreadStatusProcessing, "processing")
+	_, ok, err = threadRepo.UpdateStatus(context.Background(), t2.ID, []domain.ThreadStatus{domain.ThreadStatusAwaitingPayment}, domain.ThreadStatusProcessing, "processing")
 	require.NoError(t, err)
 	require.True(t, ok)
 	processingMs2 := 4000
@@ -70,7 +70,7 @@ func TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages(t *testing
 	_, err = threadRepo.SetMessageFeedback(context.Background(), msgs2[len(msgs2)-1].ID, sess.ID, domain.MessageFeedbackDislike)
 	require.NoError(t, err)
 
-	// Тред 3: остаётся queued, без ответа ассистента (не должен влиять на
+	// Тред 3: остаётся awaiting_payment, без ответа ассистента (не должен влиять на
 	// avg_processing_time_sec/satisfaction_rate — только на total/breakdown).
 	_, _, err = threadRepo.CreateThread(context.Background(),
 		newTestThread("88888888-9999-9999-9999-999999999999", sess.ID, now),
@@ -91,7 +91,7 @@ func TestAnalyticsRepo_GetOverview_AggregatesAcrossThreadsAndMessages(t *testing
 	require.Equal(t, 3, overview.TotalThreads, "soft-deleted thread excluded")
 	require.Equal(t, 1, overview.StatusBreakdown[domain.ThreadStatusDone])
 	require.Equal(t, 1, overview.StatusBreakdown[domain.ThreadStatusError])
-	require.Equal(t, 1, overview.StatusBreakdown[domain.ThreadStatusQueued])
+	require.Equal(t, 1, overview.StatusBreakdown[domain.ThreadStatusAwaitingPayment])
 	require.Equal(t, 0, overview.StatusBreakdown[domain.ThreadStatusCanceled])
 
 	require.NotNil(t, overview.AvgProcessingTimeSec)

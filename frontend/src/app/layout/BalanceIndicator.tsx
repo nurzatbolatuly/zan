@@ -1,18 +1,24 @@
-import { useSessionStore } from "@/shared/stores/useSessionStore";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/shared/lib/api";
 import { navDictionary } from "@/shared/locales/nav";
 import type { Lang } from "@/shared/types/common";
+import type { BalanceEntryDto } from "@/shared/types/api";
 
-/** Gap из PLAN.md §2 (brief §3.4) — баланс мок до Stage 6, но виден пользователю уже сейчас. */
+/** Баланс — счётчик только для `qa` (brief §3.4), см. instructions.md «Конвенции». */
 export function BalanceIndicator({ lang }: { lang: Lang }) {
-  const balance = useSessionStore((state) => state.balance);
+  const { data } = useQuery({
+    queryKey: ["balance"],
+    queryFn: () => api.get<BalanceEntryDto[]>("/balance"),
+  });
   const t = navDictionary[lang];
+  const qaBalance = data?.find((entry) => entry.service_id === "qa")?.quantity ?? 0;
 
   return (
     <div
       title={t.balance}
       className="hidden items-center rounded-pill border border-line bg-surface px-3 py-1.5 font-mono text-micro text-muted sm:flex"
     >
-      {t.consultationsLeft(balance)}
+      {t.consultationsLeft(qaBalance)}
     </div>
   );
 }

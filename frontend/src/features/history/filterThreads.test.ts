@@ -1,69 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { filterThreads } from "./filterThreads";
-import { THREAD_MOCKS } from "./threads.mocks";
+import { filterByPeriod } from "./filterThreads";
+import type { Thread } from "./types";
 
-describe("filterThreads", () => {
-  it("без запроса и с фильтром 'all' возвращает все треды", () => {
-    expect(
-      filterThreads({ threads: THREAD_MOCKS, search: "", status: "all" }),
-    ).toHaveLength(THREAD_MOCKS.length);
-  });
+// status/search — теперь query-параметры GET /threads (см. useThreadHistory.ts),
+// здесь тестируется только period — единственный фильтр, оставшийся на фронте
+// (openapi.yaml не поддерживает period на бэке, см. filterThreads.ts).
 
-  it("фильтрует по статусу", () => {
-    const result = filterThreads({ threads: THREAD_MOCKS, search: "", status: "done" });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.status).toBe("done");
-  });
+function threadAt(id: string, updatedAt: string): Thread {
+  return {
+    id,
+    title: id,
+    preview: id,
+    status: "done",
+    updatedAt,
+    messageCount: 1,
+  };
+}
 
-  it("ищет по заголовку без учёта регистра", () => {
-    const result = filterThreads({
-      threads: THREAD_MOCKS,
-      search: "трудовую книжку",
-      status: "all",
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.id).toBe("thread-done-1");
-  });
-
-  it("ищет и по превью, не только по заголовку", () => {
-    const result = filterThreads({
-      threads: THREAD_MOCKS,
-      search: "оплата возвращена",
-      status: "all",
-    });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.id).toBe("thread-error-1");
-  });
-
-  it("применяет статус и поиск одновременно (AND, не OR)", () => {
-    const result = filterThreads({
-      threads: THREAD_MOCKS,
-      search: "договора",
-      status: "error",
-    });
-    expect(result).toHaveLength(0);
-  });
-
-  it("не падает на пустом списке", () => {
-    expect(filterThreads({ threads: [], search: "что угодно", status: "all" })).toEqual(
-      [],
-    );
-  });
-});
-
-describe("filterThreads — period", () => {
+describe("filterByPeriod", () => {
   const now = new Date("2026-09-20T12:00:00.000Z");
-
-  function threadAt(id: string, updatedAt: string) {
-    return {
-      id,
-      title: id,
-      preview: id,
-      status: "done" as const,
-      updatedAt,
-      processingTimeSeconds: 0,
-    };
-  }
 
   const threads = [
     threadAt("today", "2026-09-20T08:00:00.000Z"),
@@ -74,74 +29,39 @@ describe("filterThreads — period", () => {
     threadAt("40-days-ago", "2026-08-11T12:00:00.000Z"),
   ];
 
-  it("period 'all' не фильтрует по дате", () => {
-    expect(
-      filterThreads({ threads, search: "", status: "all", period: "all", now }),
-    ).toHaveLength(threads.length);
+  it("не падает на пустом списке", () => {
+    expect(filterByPeriod([], "today", now)).toEqual([]);
   });
 
-  it("period 'today' — только сегодняшний UTC-день", () => {
-    const result = filterThreads({
-      threads,
-      search: "",
-      status: "all",
-      period: "today",
-      now,
-    });
-    expect(result.map((t) => t.id)).toEqual(["today"]);
+  it("'all' не фильтрует по дате", () => {
+    expect(filterByPeriod(threads, "all", now)).toHaveLength(threads.length);
   });
 
-  it("period 'yesterday' — только вчерашний UTC-день", () => {
-    const result = filterThreads({
-      threads,
-      search: "",
-      status: "all",
-      period: "yesterday",
-      now,
-    });
-    expect(result.map((t) => t.id)).toEqual(["yesterday"]);
+  it("'today' — только сегодняшний UTC-день", () => {
+    expect(filterByPeriod(threads, "today", now).map((t) => t.id)).toEqual(["today"]);
   });
 
-  it("period '7d' — включает сегодня/вчера/3 дня назад, но не 10 дней назад", () => {
-    const result = filterThreads({
-      threads,
-      search: "",
-      status: "all",
-      period: "7d",
-      now,
-    });
-    expect(result.map((t) => t.id)).toEqual(["today", "yesterday", "3-days-ago"]);
+  it("'yesterday' — только вчерашний UTC-день", () => {
+    expect(filterByPeriod(threads, "yesterday", now).map((t) => t.id)).toEqual([
+      "yesterday",
+    ]);
   });
 
-  it("period '30d' — включает всё до 30 дней, но не 40 дней назад", () => {
-    const result = filterThreads({
-      threads,
-      search: "",
-      status: "all",
-      period: "30d",
-      now,
-    });
-    expect(result.map((t) => t.id)).toEqual([
+  it("'7d' — включает сегодня/вчера/3 дня назад, но не 10 дней назад", () => {
+    expect(filterByPeriod(threads, "7d", now).map((t) => t.id)).toEqual([
+      "today",
+      "yesterday",
+      "3-days-ago",
+    ]);
+  });
+
+  it("'30d' — включает всё до 30 дней, но не 40 дней назад", () => {
+    expect(filterByPeriod(threads, "30d", now).map((t) => t.id)).toEqual([
       "today",
       "yesterday",
       "3-days-ago",
       "10-days-ago",
       "25-days-ago",
     ]);
-  });
-
-  it("период и статус применяются одновременно (AND)", () => {
-    const mixedStatus = [
-      { ...threads[0]!, status: "done" as const },
-      { ...threads[1]!, status: "error" as const },
-    ];
-    const result = filterThreads({
-      threads: mixedStatus,
-      search: "",
-      status: "done",
-      period: "7d",
-      now,
-    });
-    expect(result.map((t) => t.id)).toEqual(["today"]);
   });
 });

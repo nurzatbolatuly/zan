@@ -23,6 +23,7 @@ interface BundleEditModalProps {
   services: Service[];
   initialBundle: Bundle | null;
   labels: BundleEditModalLabels;
+  isPending: boolean;
   onSave: (values: BundleFormResult) => void;
   onClose: () => void;
 }
@@ -76,6 +77,7 @@ export function BundleEditModal({
   services,
   initialBundle,
   labels,
+  isPending,
   onSave,
   onClose,
 }: BundleEditModalProps) {
@@ -144,8 +146,10 @@ export function BundleEditModal({
         </div>
 
         <div className="flex flex-col gap-2">
-          <Button type="submit">{labels.save}</Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? "…" : labels.save}
+          </Button>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={isPending}>
             {labels.cancel}
           </Button>
         </div>

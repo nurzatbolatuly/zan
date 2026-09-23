@@ -1,9 +1,6 @@
 // Package grpcclient — связь backend/ с helper/ (BACKEND_PLAN.md §3):
 // единая точка client-side interceptor'ов (ретраи/circuit breaker/лог/
-// trace-id), которые появятся здесь на Stage 4/5 вместе с первым реальным
-// RPC (RagService/FilesService/DocumentsService/SttService). На Stage 0
-// helper ещё не отдаёт ни одного бизнес-сервиса — пакет несёт только Dial,
-// который Stage 4/5 переиспользует не переписывая.
+// trace-id) для всех RPC helper/ (FilesService/DocumentsService/SttService).
 package grpcclient
 
 import (

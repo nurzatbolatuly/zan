@@ -47,6 +47,7 @@ export const useUnsavedChangesStore = create<UnsavedChangesState>((set, get) => 
       onConfirm: () => {
         set({ isDirty: false, message: "" });
         action();
+        return Promise.resolve();
       },
     });
   },

@@ -1,8 +1,6 @@
-import { Plus } from "lucide-react";
-import { Button, Card } from "@/shared/ui";
-import type { Service, ServiceFormResult, ServiceId } from "../types";
+import { Card } from "@/shared/ui";
+import type { Service, ServiceId } from "../types";
 import { ServiceRow } from "./ServiceRow";
-import { ServiceCreateModal } from "./ServiceCreateModal";
 
 interface ServicesSectionProps {
   title: string;
@@ -10,62 +8,42 @@ interface ServicesSectionProps {
   typeFieldLabel: string;
   nameFieldLabel: string;
   priceFieldLabel: string;
-  addLabel: string;
-  deleteLabel: string;
+  activeLabel: string;
+  inactiveLabel: string;
+  toggleActiveLabel: (serviceName: string, willBeActive: boolean) => string;
   services: Service[];
   onChange: (
     id: ServiceId,
     patch: Partial<Pick<Service, "name" | "unitPriceTenge">>,
   ) => void;
   onCommit: (service: Service) => void;
-  onDelete: (service: Service) => void;
-  isCreateModalOpen: boolean;
-  createModalKey: string;
-  modalTitle: string;
-  modalLabels: {
-    save: string;
-    cancel: string;
-    typeRequiredError: string;
-    nameRequiredError: string;
-    priceRequiredError: string;
-  };
-  onOpenCreate: () => void;
-  onCloseCreate: () => void;
-  onCreate: (values: ServiceFormResult) => void;
+  onToggleActive: (service: Service, isActive: boolean) => void;
 }
 
-/** Settings → Тарифы → список услуг (PLAN.md §5 Stage 4b + create/delete на моках). */
+/**
+ * Settings → Тарифы → список услуг (Stage 6). Каталог услуг фиксирован
+ * миграцией на бэке (только qa/doc) — нет добавления/удаления, только
+ * инлайн-правка цены/названия и переключатель активности.
+ */
 export function ServicesSection({
   title,
   subtitle,
   typeFieldLabel,
   nameFieldLabel,
   priceFieldLabel,
-  addLabel,
-  deleteLabel,
+  activeLabel,
+  inactiveLabel,
+  toggleActiveLabel,
   services,
   onChange,
   onCommit,
-  onDelete,
-  isCreateModalOpen,
-  createModalKey,
-  modalTitle,
-  modalLabels,
-  onOpenCreate,
-  onCloseCreate,
-  onCreate,
+  onToggleActive,
 }: ServicesSectionProps) {
   return (
     <Card>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-h3 text-ink">{title}</h2>
-          <p className="text-caption text-muted">{subtitle}</p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={onOpenCreate}>
-          <Plus size={16} aria-hidden="true" />
-          {addLabel}
-        </Button>
+      <div className="mb-4">
+        <h2 className="text-h3 text-ink">{title}</h2>
+        <p className="text-caption text-muted">{subtitle}</p>
       </div>
       <div className="flex flex-col gap-2.5">
         {services.map((service) => (
@@ -75,27 +53,15 @@ export function ServicesSection({
             typeFieldLabel={typeFieldLabel}
             nameFieldLabel={nameFieldLabel}
             priceFieldLabel={priceFieldLabel}
-            deleteLabel={deleteLabel}
+            activeLabel={activeLabel}
+            inactiveLabel={inactiveLabel}
+            toggleActiveLabel={toggleActiveLabel}
             onChange={(patch) => onChange(service.id, patch)}
             onCommit={() => onCommit(service)}
-            onDelete={() => onDelete(service)}
+            onToggleActive={(isActive) => onToggleActive(service, isActive)}
           />
         ))}
       </div>
-
-      <ServiceCreateModal
-        key={createModalKey}
-        open={isCreateModalOpen}
-        title={modalTitle}
-        labels={{
-          typeField: typeFieldLabel,
-          nameField: nameFieldLabel,
-          priceField: priceFieldLabel,
-          ...modalLabels,
-        }}
-        onSave={onCreate}
-        onClose={onCloseCreate}
-      />
     </Card>
   );
 }

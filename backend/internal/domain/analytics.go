@@ -10,8 +10,8 @@ package domain
 // AvgProcessingTimeSec/SatisfactionRate — nullable, не 0: на пустой/свежей
 // БД (ни одного отвеченного сообщения, ни одной оценки) отношение
 // 0-к-0 не имеет смысла как метрика и не должно маскироваться под "всё
-// идеально" (0.0) или "всё плохо" (тоже 0.0) — тот же принцип, что
-// domain.Thread.PaidAt/FreeUntil: explicit nil вместо санитайзинг-нуля.
+// идеально" (0.0) или "всё плохо" (тоже 0.0): explicit nil вместо
+// санитайзинг-нуля.
 type AnalyticsOverview struct {
 	TotalThreads         int
 	StatusBreakdown      map[ThreadStatus]int

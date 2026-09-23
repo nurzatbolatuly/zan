@@ -2,63 +2,73 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLangStore } from "@/shared/stores/useLangStore";
 import { useUnsavedChangesStore } from "@/shared/stores/useUnsavedChangesStore";
 import { useUnsavedChangesGuard } from "@/shared/hooks/useUnsavedChangesGuard";
 import { useToast } from "@/shared/ui";
 import { logger } from "@/shared/lib/logger";
-import { AGENT_PROMPT_MOCKS } from "./mocks";
+import { api } from "@/shared/lib/api";
+import { describeApiError } from "@/shared/lib/apiErrorMessages";
 import { settingsDictionary } from "./locales";
 import type { AgentPromptKey } from "./types";
+import type { AgentPromptDto } from "@/shared/types/api";
 
 export type PromptsFormValues = Record<AgentPromptKey, string>;
 
-// Мок сохранения — реальный `AgentPrompt` CRUD приходит в Stage 6
-// (backend-roadmap.md:23), сейчас только имитация сетевой задержки, чтобы UI
-// (disabled-состояние кнопки, "Сохранено") уже был рассчитан на асинхронность.
-const MOCK_SAVE_DELAY_MS = 400;
+const EMPTY_VALUES: PromptsFormValues = { qa: "", document: "" };
 
 /**
- * Вся логика вкладки «Промпты» (PLAN.md §5 Stage 4a): форма на react-hook-form
- * + zod (первое реальное применение стека, зафиксированного в PLAN.md §3 —
- * до этого RHF/Zod были в зависимостях, но не использовались, instructions.md
- * «Конвенции»), guard на несохранённые изменения при уходе со страницы.
+ * Вся логика вкладки «Промпты» (PLAN.md §5 Stage 4a, подключена к реальному
+ * `AgentPrompt` CRUD в Stage 6 — `GET/PUT /admin/prompts`, требует
+ * `X-Admin-Token`, см. `AdminGate.tsx`). Сохраняются только реально
+ * изменённые промпты (`formState.dirtyFields`), не оба сразу — незачем
+ * перезаписывать `updated_at` промпта, который админ не трогал.
  */
 export function usePromptsForm() {
   const lang = useLangStore((state) => state.lang);
   const t = settingsDictionary[lang].prompts;
   const toast = useToast();
-  const prompts = AGENT_PROMPT_MOCKS[lang];
+  const queryClient = useQueryClient();
+
+  const promptsQuery = useQuery({
+    queryKey: ["admin", "prompts"],
+    queryFn: () => api.get<AgentPromptDto[]>("/admin/prompts", { admin: true }),
+  });
+
+  const prompts = (["qa", "document"] as const).map((key) => ({
+    key,
+    ...t.labels[key],
+    value: promptsQuery.data?.find((p) => p.agent_type === key)?.prompt_text ?? "",
+  }));
 
   const schema = z.object({
     qa: z.string().trim().min(1, t.requiredError),
-    documents: z.string().trim().min(1, t.requiredError),
+    document: z.string().trim().min(1, t.requiredError),
   });
-
-  const defaultValues: PromptsFormValues = {
-    qa: prompts.find((p) => p.key === "qa")?.value ?? "",
-    documents: prompts.find((p) => p.key === "documents")?.value ?? "",
-  };
 
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isDirty, isSubmitting },
+    formState: { errors, isDirty, dirtyFields, isSubmitting },
   } = useForm<PromptsFormValues>({
     resolver: zodResolver(schema),
-    defaultValues,
-    // Смена языка не должна казаться "несохранённым изменением" — форма
-    // переинициализируется на моки нового языка (см. эффект ниже).
+    defaultValues: EMPTY_VALUES,
   });
 
-  // Переключение RU/KZ на этом экране показывает промпты другого языка — как
-  // и Chat (instructions.md «Конвенции»: контент по языку достаётся заново,
-  // а не хранится один раз при монтировании).
+  // Как только промпты загрузились (или переключился язык — label/hint
+  // локализованы, а не value, поэтому язык сам по себе не должен казаться
+  // несохранённым изменением), форма переинициализируется реальными значениями.
   useEffect(() => {
-    reset(defaultValues);
+    if (!promptsQuery.data) return;
+    reset({
+      qa: promptsQuery.data.find((p) => p.agent_type === "qa")?.prompt_text ?? "",
+      document:
+        promptsQuery.data.find((p) => p.agent_type === "document")?.prompt_text ?? "",
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang]);
+  }, [promptsQuery.data]);
 
   useEffect(() => {
     useUnsavedChangesStore
@@ -67,9 +77,6 @@ export function usePromptsForm() {
   }, [isDirty, t.unsavedGuardMessage]);
   useUnsavedChangesGuard(isDirty);
 
-  // Сброс глобального флага, если вкладка ушла с экрана не через guard
-  // (например, программная навигация мимо шапки) — не должен "залипать"
-  // и блокировать переход в никак не связанном месте.
   useEffect(() => {
     return () => {
       useUnsavedChangesStore.getState().setDirty(false);
@@ -77,15 +84,37 @@ export function usePromptsForm() {
   }, []);
 
   async function onSubmit(values: PromptsFormValues) {
-    logger.info({ scope: "settings.prompts", event: "save_requested" });
-    await new Promise((resolve) => setTimeout(resolve, MOCK_SAVE_DELAY_MS));
-    logger.info({ scope: "settings.prompts", event: "save_succeeded" });
-    toast(t.savedNote, "success");
-    reset(values);
+    const changedKeys = (Object.keys(dirtyFields) as AgentPromptKey[]).filter(
+      (key) => dirtyFields[key],
+    );
+    if (changedKeys.length === 0) return;
+
+    logger.info({
+      scope: "settings.prompts",
+      event: "save_requested",
+      data: { keys: changedKeys },
+    });
+    try {
+      await Promise.all(
+        changedKeys.map((key) =>
+          api.put(`/admin/prompts/${key}`, { prompt_text: values[key] }, { admin: true }),
+        ),
+      );
+      logger.info({ scope: "settings.prompts", event: "save_succeeded" });
+      toast(t.savedNote, "success");
+      await queryClient.invalidateQueries({ queryKey: ["admin", "prompts"] });
+      reset(values);
+    } catch (error) {
+      logger.error({ scope: "settings.prompts", event: "save_failed", error });
+      toast(describeApiError(error, lang), "error");
+    }
   }
 
   return {
     prompts,
+    isLoading: promptsQuery.isLoading,
+    isError: promptsQuery.isError,
+    retry: () => void promptsQuery.refetch(),
     register,
     errors,
     isDirty,

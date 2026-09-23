@@ -27,11 +27,8 @@ type Config struct {
 	// Контракт уровней — backend-roadmap.md §6.4.
 	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
 
-	// GRPCHelperTarget — адрес gRPC-сервера helper/ (host:port). Читается
-	// уже на Stage 0 (нужен в docker-compose.yml), но пока никем не
-	// используется — internal/grpcclient начинает реально дозваниваться
-	// сюда с Stage 4/5 (BACKEND_PLAN.md), когда у helper появится первый
-	// настоящий RPC.
+	// GRPCHelperTarget — адрес gRPC-сервера helper/ (host:port), куда
+	// дозванивается internal/grpcclient.
 	GRPCHelperTarget string `env:"GRPC_HELPER_TARGET" envDefault:"localhost:9090"`
 
 	// DatabaseURL — DSN схемы core (BACKEND_PLAN.md §1.3). Дефолт совпадает
@@ -51,12 +48,6 @@ type Config struct {
 	// envDefault — та же причина, что у AdminToken.
 	SessionHMACSecret string `env:"SESSION_HMAC_SECRET,required"`
 
-	// ThreadFreeUntil — окно бесплатных уточнений внутри треда после
-	// оплаты (zan-backend-tz-v2.md §4.3, BACKEND_PLAN.md §6 п.8: "72 часа,
-	// конфигурируемо через ENV на случай пересмотра продуктом без
-	// деплоя кода").
-	ThreadFreeUntil time.Duration `env:"THREAD_FREE_UNTIL" envDefault:"72h"`
-
 	// InternalSecret — общий секрет Go<->Python поверх сетевой изоляции
 	// (BACKEND_PLAN.md §1: "shared secret — вторая линия обороны"),
 	// внутренние вызовы аутентифицируются метадатой x-internal-secret.
@@ -65,15 +56,15 @@ type Config struct {
 
 	// --- S3-совместимое хранилище файлов (Stage 4, BACKEND_PLAN.md §3.1) ---
 
-	// S3Endpoint — адрес S3 API, каким его видят контейнеры backend/helper
-	// в одной docker-сети ("http://minio:9000" в docker-compose). Используется
+	// S3Endpoint — адрес S3 API, каким его видят backend/helper изнутри
+	// своей сети (приватный адрес хостинга/docker-сети). Используется
 	// и для реальных операций (Put/Head/CreateBucket), и для presign-ссылок,
 	// которые должен разыменовать helper/ (тот же docker-сеть — Go->Python
 	// плечо контракта, BACKEND_PLAN.md §3.1: "файлы передаются по ссылке").
 	S3Endpoint string `env:"S3_ENDPOINT" envDefault:"http://localhost:9000"`
 
 	// S3PublicEndpoint — адрес, по которому presigned-ссылка разыменовывается
-	// снаружи docker-сети (браузер клиента, `curl` из scripts/smoke-test.sh,
+	// снаружи docker-сети (браузер клиента, `curl` с хоста,
 	// `go test` интеграционных тестов, запущенный на хосте) — в dev это тот
 	// же MinIO, но опубликованный на localhost, а не по внутреннему DNS-имени
 	// "minio", которое снаружи docker-сети не резолвится. Пусто по умолчанию —
@@ -84,10 +75,7 @@ type Config struct {
 	// S3Region — SigV4 требует непустой регион, MinIO сам его игнорирует.
 	S3Region string `env:"S3_REGION" envDefault:"us-east-1"`
 
-	// S3AccessKey/S3SecretKey — учётные данные MinIO (совпадают с
-	// MINIO_ROOT_USER/MINIO_ROOT_PASSWORD в docker-compose.yml — не заводим
-	// отдельный дублирующий набор переменных, тот же приём, что у DatabaseURL
-	// и POSTGRES_*).
+	// S3AccessKey/S3SecretKey — учётные данные S3-совместимого хранилища.
 	S3AccessKey string `env:"S3_ACCESS_KEY,required"`
 	S3SecretKey string `env:"S3_SECRET_KEY,required"`
 
@@ -97,8 +85,10 @@ type Config struct {
 
 	// --- Лимиты загрузки (BACKEND_PLAN.md §6 п.13, зафиксировано Stage 4) ---
 
-	// FileMaxSizeBytes — лимит POST /files/upload (zan-backend-tz-v3.md §5.3).
-	FileMaxSizeBytes int64 `env:"FILE_MAX_SIZE_BYTES" envDefault:"20971520"` // 20 МБ
+	// FileMaxSizeBytes — лимит POST /files/upload, файл любого типа
+	// (превышение — 413 file_too_large). Фронт проверяет тот же лимит до
+	// отправки (VITE_FILE_MAX_SIZE_BYTES) — значения держать равными.
+	FileMaxSizeBytes int64 `env:"FILE_MAX_SIZE_BYTES" envDefault:"15728640"` // 15 МБ
 
 	// VoiceMaxSizeBytes — лимит POST /voice/transcribe — короткая голосовая
 	// заметка, не полноценный файл, лимит меньше файлового.
@@ -118,41 +108,56 @@ type Config struct {
 
 	// OpenAIModel — конфигурируемо (не хардкод), чтобы смена модели не
 	// требовала пересборки бинаря — тот же принцип, что WhisperModelSize
-	// на стороне Python (BACKEND_PLAN.md §6 п.10).
-	OpenAIModel string `env:"OPENAI_MODEL" envDefault:"gpt-4o"`
+	// на стороне Python (BACKEND_PLAN.md §6 п.10). Дефолт обновлён
+	// gpt-4o -> gpt-5 (Stage 9, WS-стриминг ответа, запрос пользователя).
+	OpenAIModel string `env:"OPENAI_MODEL" envDefault:"gpt-5"`
 
 	// OpenAIBaseURL — переопределяется в тестах/локальной разработке на
 	// адрес фейкового сервера (httptest) вместо реального api.openai.com —
 	// internal/agent не завязан на конкретный хост.
 	OpenAIBaseURL string `env:"OPENAI_BASE_URL" envDefault:"https://api.openai.com"`
 
-	// OpenAIMaxTokens — лимит длины ответа модели (структурированный
-	// JSON с answer_text/sources/findings — достаточно с запасом для
-	// развёрнутого юридического ответа). Отправляется как
-	// max_completion_tokens (internal/agent/llm_client.go), не устаревший
-	// max_tokens Chat Completions API.
-	OpenAIMaxTokens int `env:"OPENAI_MAX_TOKENS" envDefault:"2048"`
+	// OpenAIMaxTokens — отправляется как max_completion_tokens
+	// (internal/agent/llm_client.go), не устаревший max_tokens Chat
+	// Completions API. У reasoning-моделей (gpt-5, o-серия) лимит ОБЩИЙ на
+	// скрытые рассуждения и видимый ответ — при 2048 gpt-5 тратил весь
+	// бюджет на reasoning и возвращал пустой текст (finish_reason=length →
+	// agent.ErrOutputTruncated, тред error). 8192 — запас на рассуждения
+	// плюс развёрнутый юридический ответ/JSON документа.
+	OpenAIMaxTokens int `env:"OPENAI_MAX_TOKENS" envDefault:"8192"`
 
-	// LLMTimeout — таймаут одной попытки HTTP-вызова к LLM-провайдеру (до
-	// ретраев — internal/agent.llmRetryPolicy делает до 2 повторов поверх
-	// этого таймаута на каждую попытку, backend-roadmap.md §5.2).
-	LLMTimeout time.Duration `env:"LLM_TIMEOUT" envDefault:"30s"`
+	// OpenAIReasoningEffort — reasoning_effort запроса (глубина скрытых
+	// рассуждений reasoning-модели): меньше — быстрее первый токен в
+	// стриме, больше — тщательнее ответ (замер gpt-5, один Q&A-вопрос:
+	// minimal — первый токен ~1с/весь ответ ~12с, low — ~18с/~31с, без
+	// параметра = medium — ~33с/~62с). Пусто — параметр не отправляется:
+	// обязательно для не-reasoning моделей (gpt-4o и т.п.), OpenAI
+	// отвечает им 400. Без envDefault намеренно: caarlos0/env подставляет
+	// default и на ЯВНО пустую переменную, так что с дефолтом отключить
+	// параметр было бы невозможно — значение задаётся в .env
+	// (backend/.env.example: minimal). Не валидируется здесь — допустимый набор зависит
+	// от модели, неверное значение OpenAI отклонит понятным 400 в логе
+	// llm_call_completed.
+	OpenAIReasoningEffort string `env:"OPENAI_REASONING_EFFORT"`
 
-	// RagTopK — сколько кандидатов-источников запрашивать у
-	// RagService.Search на каждый вызов LLM (BACKEND_PLAN.md §3.1: "Go сам
-	// решает, что из этого передать в промпт").
-	RagTopK int `env:"RAG_TOP_K" envDefault:"5"`
+	// LLMTimeout — таймаут одной попытки не-streaming HTTP-вызова к
+	// LLM-провайдеру — GenerateDocument (до ретраев —
+	// internal/agent.llmRetryPolicy делает до 2 повторов поверх этого
+	// таймаута на каждую попытку, backend-roadmap.md §5.2). Ответ целиком
+	// приходит только в конце генерации: gpt-5 с reasoning_effort=low
+	// генерирует документ ~30с, поэтому 90с, а не прежние 30с (каждая
+	// попытка обрывалась по таймауту и ретраилась впустую).
+	LLMTimeout time.Duration `env:"LLM_TIMEOUT" envDefault:"90s"`
 
-	// --- Антивирус (Stage 8, BACKEND_PLAN.md §6 "Security-обход") ---
-
-	// ClamAVAddr — "host:port" clamd (internal/platform/clamav.Scanner).
-	// Дефолт совпадает с именем сервиса в docker-compose.yml ("clamav:3310"
-	// — тот же приём, что GRPCHelperTarget/S3Endpoint).
-	ClamAVAddr string `env:"CLAMAV_ADDR" envDefault:"clamav:3310"`
-
-	// ClamAVTimeout — на весь скан одного файла (соединение + передача +
-	// ответ), не на каждый чанк отдельно.
-	ClamAVTimeout time.Duration `env:"CLAMAV_TIMEOUT" envDefault:"10s"`
+	// LLMStreamTimeout — дедлайн на ВЕСЬ streaming-вызов Q&A
+	// (internal/agent.Client.Process) — не time-to-first-byte, а вся
+	// продолжительность потока токенов, отдельно от LLMTimeout (короткий
+	// таймаут не-стримингового GenerateDocument).
+	// http.Client.Timeout охватывает и чтение тела ответа — для SSE-потока
+	// это обрезало бы длинный ответ посередине, поэтому у стримингового
+	// http.Client таймаут не задан, дедлайн применяется через
+	// context.WithTimeout вокруг конкретно streaming-вызова.
+	LLMStreamTimeout time.Duration `env:"LLM_STREAM_TIMEOUT" envDefault:"120s"`
 
 	// --- CORS (Stage 8, BACKEND_PLAN.md §6 п.3 "Деплой") ---
 
@@ -190,7 +195,7 @@ func Load() (Config, error) {
 // генерируется (`openssl rand -hex 32` даёт ровно 64 печатных символа).
 const minSecretLength = 32
 
-// weakDefaultSecrets — плейсхолдеры из .env.example/docker-compose.yml —
+// weakDefaultSecrets — бывшие dev-плейсхолдеры локального стека —
 // синтаксически проходят проверку длины (см. minSecretLength), но
 // намеренно узнаваемы, чтобы их нельзя было случайно унести в прод
 // копированием .env без замены (тот же сценарий, из-за которого

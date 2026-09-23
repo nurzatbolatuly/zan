@@ -108,17 +108,17 @@ CREATE TABLE core.threads (
     id              uuid PRIMARY KEY,
     session_id      uuid NOT NULL REFERENCES core.sessions (id),
     service_id      text NOT NULL REFERENCES core.services (id),
-    status          text NOT NULL DEFAULT 'queued'
-                        CHECK (status IN ('queued', 'processing', 'clarify', 'done', 'error', 'canceled')),
+    -- clarify удалён 000008_drop_clarify_status; queued заменён на
+    -- awaiting_payment (тред сохранён, но не оплачен) — 000009_awaiting_payment_status.
+    status          text NOT NULL DEFAULT 'awaiting_payment'
+                        CHECK (status IN ('awaiting_payment', 'processing', 'done', 'error', 'canceled')),
     title           text NOT NULL DEFAULT '',
     preview_text    text NOT NULL DEFAULT '',
     message_count   int NOT NULL DEFAULT 0,
-    is_paid         boolean NOT NULL DEFAULT false,
-    paid_at         timestamptz,
-    free_until      timestamptz,
+    -- is_paid/paid_at/free_until/closed_at удалены 000010_per_question_billing:
+    -- один вопрос = одна консультация, оплата — по status, история — в core.payments.
     created_at      timestamptz NOT NULL DEFAULT now(),
     last_message_at timestamptz,
-    closed_at       timestamptz,
     deleted_at      timestamptz -- soft delete, v2 §4.5
 );
 
@@ -128,8 +128,8 @@ CREATE INDEX idx_threads_session_created ON core.threads (session_id, created_at
 
 -- Stage 2 (000003_stage2_billing): core.payments.thread_id (nullable FK) —
 -- под checkout {..., thread_id?}, когда баланс кончился в момент открытия
--- треда (zan-backend-tz-v2.md §4.2 п.2). Проставление thread.is_paid=true
--- по этому полю — логика Stage 3, здесь только сама связь в БД.
+-- треда (zan-backend-tz-v2.md §4.2 п.2). Оплата вопроса треда по этому
+-- платежу — thread.Service.Resume, здесь только сама связь в БД.
 ALTER TABLE core.payments
     ADD COLUMN thread_id uuid REFERENCES core.threads (id);
 
@@ -144,11 +144,8 @@ CREATE TABLE core.messages (
     text               text NOT NULL DEFAULT '',
     sources            jsonb,
     findings           jsonb,
-    -- unverified_sources — Stage 5 (000005_stage5_agent): true, если LLM
-    -- процитировала источник вне того, что реально вернул RagService.Search
-    -- (internal/agent.verifySources) — отдаётся в API-ответе (backend-roadmap.md
-    -- §6 открытый вопрос №11), поэтому персистится, не только логируется.
-    unverified_sources boolean NOT NULL DEFAULT false,
+    -- unverified_sources (Stage 5, 000005) удалён 000007_remove_rag — сверять
+    -- процитированные источники больше не с чем (RAG удалён).
     feedback           text CHECK (feedback IN ('like', 'dislike')),
     processing_time_ms int,
     created_at         timestamptz NOT NULL DEFAULT now()

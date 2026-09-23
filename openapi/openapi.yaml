@@ -518,12 +518,19 @@ paths:
     post:
       summary: Создать тред
       description: >
-        zan-backend-tz-v2.md §3.2/§4.2. Если баланс sessionID по service_id
-        достаточен — списывает 1 единицу и синхронно (Stage 3: StubAgent)
-        обрабатывает запрос, ответ уже в теле (status done/clarify/error).
-        Если баланса нет — тред создаётся неоплаченным (status=queued,
-        is_paid=false); клиент проводит POST /payments/checkout
-        {kind: single_service, thread_id} → confirm активирует тред.
+        zan-backend-tz-v2.md §3.2/§4.2. Тред с вопросом сохраняется всегда.
+        Если баланс sessionID по service_id достаточен — списывает 1 единицу
+        и переводит тред в status=processing;
+        обработка (вызов LLM) идёт асинхронно в фоне (Stage 9 — WS-стриминг),
+        ответ ассистента в теле этого запроса ЕЩЁ НЕТ — клиент получает его
+        через GET /ws/threads/{id} (см. "WebSocket" ниже), messages в теле
+        содержит только что сохранённое сообщение пользователя. Если баланса
+        нет — тред остаётся неоплаченным (status=awaiting_payment) и виден
+        в истории; клиент либо платит сразу
+        (POST /payments/checkout {kind: single_service, thread_id} → confirm
+        запускает тред тем же асинхронным путём), либо позже пополняет
+        баланс и вызывает POST /threads/{id}/resume или
+        POST /threads/{id}/messages.
         Ограничено rate-limit по IP и по session_id (zan-backend-tz-v3.md
         §5.7, Stage 7) — самая дорогая операция публичного API.
       tags: [threads]
@@ -535,7 +542,11 @@ paths:
             schema: { $ref: "#/components/schemas/CreateThreadRequest" }
       responses:
         "201":
-          description: Тред создан (оплачен и обработан, либо в очереди на оплату)
+          description: >
+            Тред создан — status=processing (обработка уже запущена в фоне,
+            ответ ассистента придёт по WS) либо status=awaiting_payment
+            (баланса нет, тред ждёт оплаты).
+            messages содержит только сообщение пользователя.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ThreadDetail" }
@@ -645,11 +656,15 @@ paths:
 
   /threads/{id}/messages:
     post:
-      summary: Добавить сообщение (уточнение) в тред
+      summary: Задать новый вопрос в треде
       description: >
-        zan-backend-tz-v2.md §3.2/§4.3. Бесплатно, пока status IN
-        (done, clarify) и now() < free_until — баланс повторно не
-        списывается. Ответ ассистента уже в теле (StubAgent, синхронно).
+        zan-backend-tz-v2.md §3.2. Один вопрос = одна консультация,
+        бесплатных уточнений нет: из status=done или awaiting_payment
+        сообщение сохраняется, тред переходит в awaiting_payment и сразу
+        списывает 1 единицу с баланса; баланса нет — остаётся
+        awaiting_payment. Обработка —
+        асинхронная (Stage 9), как у POST /threads: ответ ассистента в теле
+        ЕЩЁ НЕТ, придёт по GET /ws/threads/{id}.
       tags: [threads]
       security: [{ SessionCookie: [], SessionBearer: [] }]
       parameters:
@@ -664,7 +679,10 @@ paths:
             schema: { $ref: "#/components/schemas/AddMessageRequest" }
       responses:
         "200":
-          description: OK
+          description: >
+            Тред переведён в status=processing (или остался
+            awaiting_payment — баланса нет), messages содержит только что
+            добавленное сообщение пользователя — без ответа ассистента.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ThreadDetail" }
@@ -685,9 +703,45 @@ paths:
               schema: { $ref: "#/components/schemas/ApiError" }
         "409":
           description: >
-            thread_closed (free_until истёк — начните новый тред),
-            thread_not_active (status error/canceled), payment_required
-            (тред ещё не оплачен) или thread_busy (уже обрабатывается)
+            thread_not_active (status error/canceled) или thread_busy
+            (уже обрабатывается)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /threads/{id}/resume:
+    post:
+      summary: Перезапустить вопрос неоплаченного треда
+      description: >
+        Для status=awaiting_payment: списывает 1 единицу service_id с баланса
+        и запускает обработку уже сохранённой истории (асинхронно, ответ
+        придёт по GET /ws/threads/{id}). Баланса нет — тред остаётся
+        awaiting_payment, это не ошибка. В любом другом статусе — no-op,
+        возвращает текущее состояние (идемпотентно: двойной клик не
+        списывает дважды). Тот же путь вызывается сервером после успешного
+        POST /payments/{id}/confirm с thread_id.
+      tags: [threads]
+      security: [{ SessionCookie: [], SessionBearer: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: >
+            status=processing (оплачено с баланса, обработка запущена) либо
+            status=awaiting_payment (баланса всё ещё нет).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadDetail" }
+        "401":
+          description: См. GET /sessions/me
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: thread_not_found
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
@@ -696,7 +750,7 @@ paths:
     post:
       summary: Отменить тред
       description: >
-        zan-backend-tz-v2.md §3.2 — только из статусов queued/processing
+        zan-backend-tz-v2.md §3.2 — только из статусов awaiting_payment/processing
         ("до оплаты или во время обработки"), см. domain.ThreadStatus.CanTransitionTo.
       tags: [threads]
       security: [{ SessionCookie: [], SessionBearer: [] }]
@@ -722,11 +776,33 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
         "409":
-          description: thread_cannot_cancel — статус не queued/processing
+          description: thread_cannot_cancel — статус не awaiting_payment/processing
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
 
+  # --- WebSocket (Stage 9) — документация, не формальная часть REST-контракта
+  # OpenAPI (спецификация не описывает WS как первоклассный примитив, поэтому
+  # это простой YAML-комментарий + схема WsThreadEvent ниже, используемая
+  # только как справочник полей, не как реальный path). ---
+  # GET /ws/threads/{id}?token=<session_token>  (Upgrade: websocket)
+  # Авторизация — тот же opaque session-токен, что и REST (см. SessionBearer
+  # ниже), но ТОЛЬКО через query-параметр `token` (браузерный WebSocket API
+  # не может выставить заголовок Authorization на хендшейке) — сам токен и
+  # его валидация не отличаются от Authorization: Session <token>.
+  # Владение тредом проверяется до апгрейда — чужой/несуществующий id даёт
+  # обычный HTTP 401/404, соединение не устанавливается.
+  # Сервер шлёт события (клиент ничего не отправляет, кроме implicit close),
+  # один JSON-объект WsThreadEvent на кадр, порядок гарантирован per-thread:
+  #   1. thread_status  — всегда первым на новом соединении (снапшот текущего
+  #      состояния, даже если раунд обработки уже завершился или ещё не
+  #      начинался)
+  #   2. answer_delta*  — 0..N раз, токены ответа по мере генерации (прямой
+  #      streaming-вызов LLM); на "позднем" подключении снапшот отдаёт уже
+  #      накопленный текст одним delta, а не всей историей по токену
+  #   3. answer_done ИЛИ error — ровно один раз, конец раунда обработки
+  # Соединение остаётся открытым для следующего раунда (новое сообщение в тот
+  # же тред) — не закрывается сервером после answer_done/error.
   /threads/{id}/generate-document:
     post:
       summary: Сгенерировать документ по треду
@@ -860,10 +936,12 @@ paths:
       summary: Загрузить файл
       description: >
         zan-backend-tz-v2.md §3.3, Stage 4. multipart/form-data, поле "file".
-        Лимит — 20 МБ, форматы — pdf/docx/png/jpg (BACKEND_PLAN.md §6 п.13).
-        Синхронно вызывает FilesService.Extract (BACKEND_PLAN.md §3) —
-        неудача извлечения не проваливает upload (zan-backend-tz-v3.md §5.3):
-        файл всё равно сохраняется с processing_status=error. file_id из
+        Принимается файл любого типа, лимит — FILE_MAX_SIZE_BYTES (по
+        умолчанию 15 МБ). Пустой Content-Type части сохраняется как
+        application/octet-stream. Текст извлекается синхронно
+        (FilesService.Extract) только из pdf/docx/png/jpg — остальные типы
+        и неудача извлечения не проваливают upload (zan-backend-tz-v3.md
+        §5.3): файл сохраняется с processing_status=error. file_id из
         ответа передаётся в file_ids POST /threads|.../messages.
       tags: [files]
       security: [{ SessionCookie: [], SessionBearer: [] }]
@@ -893,12 +971,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
         "413":
-          description: file_too_large — файл больше 20 МБ
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ApiError" }
-        "415":
-          description: unsupported_file_type — MIME вне pdf/docx/png/jpg
+          description: file_too_large — файл больше FILE_MAX_SIZE_BYTES (15 МБ)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
@@ -1085,13 +1158,11 @@ components:
         которые реально отдаёт backend/ в теле ApiError (сверено с
         internal/apierror + internal/httpserver, не список пожеланий).
         Значения из первоначального списка плана, которых в итоге не
-        оказалось отдельным кодом ошибки — `llm_timeout`/`rag_unavailable`
-        (сбой LLM/RAG внутри одного HTTP-запроса возвращает общий
-        `internal_error`, кредит услуги при этом всё равно возвращается —
-        см. thread.Service.Process, BACKEND_LOG.md Stage 5/6) и
-        `needs_clarification` (это не ошибка — успешный ответ с
-        `Thread.status="clarify"`, см. схему ThreadStatus) — фронт не должен
-        на них рассчитывать.
+        оказалось отдельным кодом ошибки — `llm_timeout` (сбой LLM
+        возвращает общий `internal_error`, кредит услуги при этом всё равно
+        возвращается — см. thread.Service) и `needs_clarification`
+        (уточняющий вопрос модели — обычный успешный ответ) — фронт не
+        должен на них рассчитывать.
 
         HTTP-статус для каждого кода фиксирован (не пересчитывается на
         лету), сверять по этому списку, не по одному только code:
@@ -1101,7 +1172,7 @@ components:
             file_not_found, payment_not_found, service_not_found,
             tariff_not_found, thread_not_found
           - 409: payment_not_pending, payment_required, thread_busy,
-            thread_cannot_cancel, thread_closed, thread_not_active
+            thread_cannot_cancel, thread_not_active
           - 413: file_too_large
           - 415: unsupported_file_type
           - 422: empty_transcript, file_rejected
@@ -1131,7 +1202,6 @@ components:
         - tariff_not_found
         - thread_busy
         - thread_cannot_cancel
-        - thread_closed
         - thread_not_active
         - thread_not_found
         - unsupported_file_type
@@ -1232,7 +1302,7 @@ components:
 
     Payment:
       type: object
-      required: [id, kind, amount, status, provider]
+      required: [id, kind, amount, status, provider, paid_at]
       properties:
         id: { type: string, format: uuid }
         kind: { $ref: "#/components/schemas/PaymentKind" }
@@ -1247,7 +1317,10 @@ components:
         zan-backend-tz-v2.md §2.6, буквально совпадает с
         frontend/src/shared/types/common.ts#ThreadStatus
         (BACKEND_PLAN.md §6 п.4). Статус-машина — domain.ThreadStatus.CanTransitionTo.
-      enum: [queued, processing, clarify, done, error, canceled]
+        Уточняющий вопрос модели приходит как обычный `done` — отдельного
+        статуса нет. `awaiting_payment` — тред с вопросом сохранён, но не
+        оплачен (заменил `queued`, миграция 000009).
+      enum: [awaiting_payment, processing, done, error, canceled]
 
     MessageSender:
       type: string
@@ -1304,7 +1377,7 @@ components:
 
     Message:
       type: object
-      required: [id, sender, input_type, text, unverified_sources, created_at]
+      required: [id, sender, input_type, text, feedback, processing_time_ms, created_at, attachments]
       properties:
         id: { type: string, format: uuid }
         sender: { $ref: "#/components/schemas/MessageSender" }
@@ -1312,23 +1385,36 @@ components:
         text: { type: string }
         sources:
           type: array
+          description: Только у ответа генерации документа; Q&A-ответ источников не несёт.
           items: { $ref: "#/components/schemas/Source" }
         findings:
           type: array
+          description: Только у ответа генерации документа (секции рендера).
           items: { $ref: "#/components/schemas/Finding" }
-        unverified_sources:
-          type: boolean
-          description: >
-            Stage 5. true — LLM процитировала источник вне того, что
-            реально вернул RAG-поиск (подозрение на галлюцинацию закона,
-            backend-roadmap.md §1.4/§5.2). Всегда false для sources=[]/
-            пользовательских сообщений. Решение "показывать ли" в UI — за
-            фронтом (backend-roadmap.md §8 п.5).
         feedback:
           allOf: [{ $ref: "#/components/schemas/MessageFeedbackValue" }]
           nullable: true
         processing_time_ms: { type: integer, nullable: true }
         created_at: { type: string, format: date-time }
+        attachments:
+          type: array
+          description: >
+            Файлы, прикреплённые пользователем к сообщению (file_ids при
+            отправке). Всегда массив — пустой у сообщений без файлов и у
+            ответов ассистента.
+          items: { $ref: "#/components/schemas/MessageAttachment" }
+
+    MessageAttachment:
+      type: object
+      description: >
+        Карточка файла в сообщении. Без ссылки на скачивание (presigned,
+        выдаётся GET /files/{file_id}) и без извлечённого текста.
+      required: [file_id, original_name, mime_type, size_bytes]
+      properties:
+        file_id: { type: string, format: uuid }
+        original_name: { type: string }
+        mime_type: { type: string, example: application/pdf }
+        size_bytes: { type: integer }
 
     GenerateDocumentResponse:
       description: Ответ POST /threads/{id}/generate-document (Stage 6).
@@ -1349,7 +1435,7 @@ components:
     Thread:
       type: object
       description: zan-backend-tz-v2.md §2.6. Без сообщений — список GET /threads.
-      required: [id, service_id, status, title, preview_text, message_count, is_paid, created_at]
+      required: [id, service_id, status, title, preview_text, message_count, created_at, last_message_at]
       properties:
         id: { type: string, format: uuid }
         service_id: { $ref: "#/components/schemas/ServiceId" }
@@ -1357,19 +1443,17 @@ components:
         title: { type: string, description: "Из первого сообщения, обрезано до ~60 символов (§4.5)." }
         preview_text: { type: string, description: "Денормализованное короткое превью (§4.5)." }
         message_count: { type: integer }
-        is_paid: { type: boolean }
-        paid_at: { type: string, format: date-time, nullable: true }
-        free_until:
-          type: string
-          format: date-time
-          nullable: true
-          description: Окно бесплатных уточнений (§4.3, конфигурируемо, дефолт 72ч).
         created_at: { type: string, format: date-time }
         last_message_at: { type: string, format: date-time, nullable: true }
-        closed_at: { type: string, format: date-time, nullable: true }
 
     ThreadDetail:
-      description: Thread + все сообщения — GET /threads/{id}, ответ POST /threads и .../messages.
+      description: >
+        Thread + все сообщения — GET /threads/{id}, ответ POST /threads и
+        .../messages. У ответа POST (Stage 9, асинхронная обработка) messages
+        может НЕ содержать ещё не сгенерированный ответ ассистента — он
+        приходит отдельно через GET /ws/threads/{id} (см. комментарий перед
+        /threads/{id}/generate-document выше) и в этот же массив ложится
+        только после answer_done/следующего GET /threads/{id}.
       allOf:
         - $ref: "#/components/schemas/Thread"
         - type: object
@@ -1378,6 +1462,78 @@ components:
             messages:
               type: array
               items: { $ref: "#/components/schemas/Message" }
+
+    WsThreadEvent:
+      description: >
+        Stage 9 — форма событий GET /ws/threads/{id} (документационная схема,
+        не используется ни в одном формальном REST path/response этого
+        файла). oneOf по полю type; discriminator указывает конкретный Go/TS
+        тип по значению type, а не подбирается по совпадению полей.
+      type: object
+      required: [type, thread_id, seq]
+      discriminator:
+        propertyName: type
+        mapping:
+          thread_status: "#/components/schemas/WsThreadStatusEvent"
+          answer_delta: "#/components/schemas/WsAnswerDeltaEvent"
+          answer_done: "#/components/schemas/WsAnswerDoneEvent"
+          error: "#/components/schemas/WsErrorEvent"
+      oneOf:
+        - $ref: "#/components/schemas/WsThreadStatusEvent"
+        - $ref: "#/components/schemas/WsAnswerDeltaEvent"
+        - $ref: "#/components/schemas/WsAnswerDoneEvent"
+        - $ref: "#/components/schemas/WsErrorEvent"
+      properties:
+        type: { type: string, enum: [thread_status, answer_delta, answer_done, error] }
+        thread_id: { type: string, format: uuid }
+        seq:
+          type: integer
+          description: Монотонный счётчик per-thread (не per-соединение) — для дефенсивного детекта пропуска на клиенте.
+
+    WsThreadStatusEvent:
+      description: Снапшот статуса — всегда первое событие на новом соединении.
+      allOf:
+        - $ref: "#/components/schemas/WsThreadEvent"
+        - type: object
+          required: [status, preview_text]
+          properties:
+            status: { $ref: "#/components/schemas/ThreadStatus" }
+            preview_text: { type: string }
+
+    WsAnswerDeltaEvent:
+      description: >
+        Токены ответа (streaming-вызов LLM). На подключении ПОСЛЕ
+        старта стрима — снапшот отдаёт весь накопленный текст одним delta.
+      allOf:
+        - $ref: "#/components/schemas/WsThreadEvent"
+        - type: object
+          required: [delta]
+          properties:
+            delta: { type: string }
+
+    WsAnswerDoneEvent:
+      description: Конец раунда обработки — финальное сообщение ассистента, та же форма, что Message (REST).
+      allOf:
+        - $ref: "#/components/schemas/WsThreadEvent"
+        - type: object
+          required: [status, message]
+          properties:
+            status: { $ref: "#/components/schemas/ThreadStatus" }
+            message: { $ref: "#/components/schemas/Message" }
+
+    WsErrorEvent:
+      description: >
+        Конец раунда обработки, неуспех — пользователю никогда не показывается
+        сырая ошибка интеграции (§3.8 instructions.md), только code/error_message.
+        Поле называется error_message, НЕ message — во избежание коллизии с
+        WsAnswerDoneEvent.message: Message в общем клиентском объединении типов.
+      allOf:
+        - $ref: "#/components/schemas/WsThreadEvent"
+        - type: object
+          required: [code, error_message]
+          properties:
+            code: { type: string, example: internal_error }
+            error_message: { type: string }
 
     ThreadListResponse:
       type: object
@@ -1455,9 +1611,9 @@ components:
         total_threads: { type: integer, description: "Не считая soft-deleted." }
         status_breakdown:
           type: object
-          description: Все 6 значений ThreadStatus как ключи, count=0 для тех, что не встретились.
+          description: Все 5 значений ThreadStatus как ключи, count=0 для тех, что не встретились.
           additionalProperties: { type: integer }
-          example: { queued: 1, processing: 0, clarify: 2, done: 30, error: 5, canceled: 4 }
+          example: { awaiting_payment: 1, processing: 0, done: 30, error: 5, canceled: 4 }
         avg_processing_time_sec:
           type: number
           nullable: true

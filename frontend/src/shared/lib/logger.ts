@@ -11,6 +11,7 @@
  */
 
 import { getApiBaseUrlSafe } from "./env";
+import { useSessionStore } from "@/shared/stores/useSessionStore";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -58,12 +59,26 @@ function serializeError(error: unknown): Record<string, unknown> {
   return { value: error };
 }
 
+/** POST /logs/client требует "message" (не "scope"/"data") и LEVEL заглавными
+ * буквами (openapi.yaml#ClientLogRequest) — record.level/scope/data остаются
+ * внутренним форматом фронта, здесь только маппинг на контракт бэка. */
+function toClientLogRequest(record: LogRecord) {
+  return {
+    session_id: useSessionStore.getState().sessionId ?? undefined,
+    trace_id: record.traceId,
+    level: record.level.toUpperCase() as "WARN" | "ERROR",
+    event: record.event,
+    message: `[${record.scope}] ${record.event}`,
+    context: { ...record.data, recent: recentInfo.slice() },
+  };
+}
+
 function sendToServer(record: LogRecord): void {
   const apiBaseUrl = getApiBaseUrlSafe();
   // логирование — best-effort и никогда не бросает: нет URL (например, забыли
   // задать env на хостинге) — просто не отправляем, запись уже ушла в консоль выше.
   if (typeof fetch === "undefined" || !apiBaseUrl) return;
-  const body = JSON.stringify({ ...record, context: recentInfo.slice() });
+  const body = JSON.stringify(toClientLogRequest(record));
   const url = `${apiBaseUrl}/logs/client`;
   // keepalive — чтобы запрос не оборвался, если ошибка произошла перед уходом со страницы
   void fetch(url, {

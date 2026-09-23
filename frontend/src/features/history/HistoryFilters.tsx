@@ -5,9 +5,8 @@ import { historyDictionary } from "./locales";
 import type { Lang, ThreadStatus } from "@/shared/types/common";
 
 const STATUS_ORDER: ThreadStatus[] = [
-  "queued",
+  "awaiting_payment",
   "processing",
-  "clarify",
   "done",
   "error",
   "canceled",

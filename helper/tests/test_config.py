@@ -7,7 +7,6 @@ def _required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INTERNAL_SECRET", "test-internal-secret")
     monkeypatch.setenv("S3_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("S3_SECRET_KEY", "test-secret-key")
-    monkeypatch.setenv("RAG_DATABASE_URL", "postgres://zan_rag:test@localhost:5432/zan")
 
 
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,8 +22,6 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.s3_public_endpoint == ""
     assert settings.s3_bucket == "zan-files"
     assert settings.whisper_model_size == "tiny"
-    assert settings.embedding_model == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    assert settings.rag_search_top_k_default == 5
 
 
 def test_settings_reads_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,7 +48,6 @@ def test_settings_reads_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_settings_missing_required_secret_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("S3_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("S3_SECRET_KEY", "test-secret-key")
-    monkeypatch.setenv("RAG_DATABASE_URL", "postgres://zan_rag:test@localhost:5432/zan")
     # INTERNAL_SECRET намеренно не задан.
 
     with pytest.raises(Exception):  # noqa: B017,PT011 — pydantic-settings ValidationError, тип не публичный API этого теста

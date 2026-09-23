@@ -1,20 +1,20 @@
 import { Button, Modal, QuantityStepper } from "@/shared/ui";
 import { formatTenge } from "@/shared/lib/format";
 import type { TariffsDictionary } from "../locales";
-import type { BuiltInServiceId, CustomOrderQuantities } from "../types";
+import type { ServiceId, CustomOrderQuantities } from "../types";
 
 interface CustomOrderModalProps {
   open: boolean;
   onClose: () => void;
   dictionary: TariffsDictionary;
-  serviceIds: BuiltInServiceId[];
+  serviceIds: ServiceId[];
   quantities: CustomOrderQuantities;
-  onQuantityChange: (serviceId: BuiltInServiceId, qty: number) => void;
+  onQuantityChange: (serviceId: ServiceId, qty: number) => void;
   totalTenge: number;
   canConfirm: boolean;
   onConfirm: () => void;
   maxQty: number;
-  unitPrices: Record<BuiltInServiceId, number>;
+  unitPrices: Record<ServiceId, number>;
 }
 
 /**

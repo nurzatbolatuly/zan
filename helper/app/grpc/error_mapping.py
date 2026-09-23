@@ -12,7 +12,6 @@ from app.core.logging import get_logger
 from app.domain.errors import (
     DownloadError,
     ExtractionError,
-    RagUnavailableError,
     RenderError,
     SttError,
     UntrustedFileURLError,
@@ -43,16 +42,6 @@ async def abort_for_exception(
     if isinstance(exc, _INVALID_ARGUMENT_ERRORS):
         logger.warning(f"{rpc}_rejected", context={"error": str(exc)})
         await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        return
-
-    if isinstance(exc, RagUnavailableError):
-        # Пул к схеме rag не поднялся при старте процесса (BACKEND_LOG.md
-        # Stage 5) — Go-сторона (internal/agent.searchSources) трактует
-        # любую ошибку этого RPC как деградацию, не блокировку, поэтому
-        # здесь достаточно ERROR (эксплуатационный сигнал "почини роль/схему"),
-        # не CRITICAL — ни один пользовательский запрос из-за этого не падает.
-        logger.error(f"{rpc}_unavailable", context={"error": str(exc)})
-        await context.abort(grpc.StatusCode.INTERNAL, "rag unavailable")
         return
 
     if isinstance(exc, DownloadError):

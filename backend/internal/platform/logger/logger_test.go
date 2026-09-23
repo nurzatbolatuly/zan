@@ -16,7 +16,7 @@ func TestNew_ContractFieldNames(t *testing.T) {
 	var buf bytes.Buffer
 	l := logger.New(&buf, slog.LevelDebug)
 
-	l.Info("thread_status_changed", slog.Group("context", slog.String("from", "queued"), slog.String("to", "processing")))
+	l.Info("thread_status_changed", slog.Group("context", slog.String("from", "awaiting_payment"), slog.String("to", "processing")))
 
 	var record map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &record))
@@ -30,7 +30,7 @@ func TestNew_ContractFieldNames(t *testing.T) {
 
 	ctx, ok := record["context"].(map[string]any)
 	require.True(t, ok, "context group must be a nested object")
-	require.Equal(t, "queued", ctx["from"])
+	require.Equal(t, "awaiting_payment", ctx["from"])
 	require.Equal(t, "processing", ctx["to"])
 }
 

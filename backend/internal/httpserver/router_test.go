@@ -30,6 +30,7 @@ import (
 	"zan-backend/internal/service/prompt"
 	"zan-backend/internal/service/session"
 	"zan-backend/internal/service/thread"
+	"zan-backend/internal/wshub"
 )
 
 // fakeSessionRepo — in-memory реализация session.Repository для юнит-тестов
@@ -98,7 +99,11 @@ func newTestDeps() httpserver.Deps {
 	cat := catalog.New(newFakeCatalogRepo(), idgen.UUIDGenerator{})
 	bill := billing.New(newFakeBillingRepo(), cat, clock.Real{}, idgen.UUIDGenerator{})
 	threadRepo := newFakeThreadRepo()
-	th := thread.New(threadRepo, bill, cat, noopFileAttacher{}, fakeAgent{}, clock.Real{}, idgen.UUIDGenerator{}, 72*time.Hour)
+	// hub — Stage 9, реальный *wshub.Hub (не фейк — сам уже покрыт
+	// internal/wshub/hub_test.go), общий для thread.Service (EventPublisher)
+	// и httpserver.Deps.Hub, как в cmd/api/main.go.
+	hub := wshub.NewHub()
+	th := thread.New(threadRepo, bill, cat, noopFileAttacher{}, fakeAgent{}, hub, clock.Real{}, idgen.UUIDGenerator{})
 	prompts := prompt.New(newFakePromptRepo(), clock.Real{})
 	// documentSvc — Stage 6, реиспользует тот же threadRepo, что и th (fake
 	// удовлетворяет document.ThreadStore структурно — тот же приём, что и в
@@ -112,6 +117,7 @@ func newTestDeps() httpserver.Deps {
 		Catalog:             cat,
 		Billing:             bill,
 		Thread:              th,
+		Hub:                 hub,
 		Documents:           documentSvc,
 		Prompts:             prompts,
 		Analytics:           analyticsSvc,

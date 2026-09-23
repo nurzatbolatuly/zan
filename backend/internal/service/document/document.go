@@ -73,7 +73,10 @@ var (
 // второй репозиторий не заводится.
 type ThreadStore interface {
 	GetByID(ctx context.Context, id string) (domain.Thread, error)
-	GetMessages(ctx context.Context, threadID string) ([]domain.Message, error)
+	// GetConversation — история треда с вложениями пользователя (тот же
+	// метод, что thread.Repository.GetConversation): документ по договору
+	// должен опираться на текст самого договора.
+	GetConversation(ctx context.Context, threadID string) ([]domain.Message, error)
 	// AppendMessage — тот же метод, что thread.Repository.AppendMessage:
 	// вставляет сообщение и атомарно обновляет message_count/last_message_at
 	// владельца-треда (internal/repo/thread_repo.go) — сгенерированный
@@ -107,20 +110,18 @@ type ServiceCatalog interface {
 	GetServiceByID(ctx context.Context, id string) (domain.Service, error)
 }
 
-// GenerateResult — структурированный результат генерации документа: то же
-// подмножество полей, что thread.AgentResult (answer_text/sources/findings/
-// unverified_sources), без Status — у генерации документа нет отдельного
-// "статуса ответа", как у Q&A (clarify/error решаются самим Generator через
-// error, см. internal/agent/document.go).
+// GenerateResult — структурированный результат генерации документа
+// (answer_text/sources/findings), без Status — у генерации документа нет
+// отдельного "статуса ответа": уточнение/ошибка решаются самим Generator через
+// error, см. internal/agent/document.go.
 type GenerateResult struct {
-	AnswerText        string
-	Sources           []domain.Source
-	Findings          []domain.Finding
-	UnverifiedSources bool
+	AnswerText string
+	Sources    []domain.Source
+	Findings   []domain.Finding
 }
 
-// Generator — вызов LLM с AgentPrompt(document) поверх той же RAG/LLM-
-// инфраструктуры, что thread.Agent (Stage 5). Порт объявлен здесь;
+// Generator — вызов LLM с AgentPrompt(document) поверх той же
+// LLM-инфраструктуры, что thread.Agent. Порт объявлен здесь;
 // internal/agent.Client реализует его новым методом GenerateDocument
 // (BACKEND_CODING_STANDARDS.md §1.1 — тот же приём, что thread.Agent,
 // объявленный в internal/service/thread и реализуемый тем же internal/agent.Client).
@@ -130,9 +131,8 @@ type Generator interface {
 
 // Renderer — DocumentsService.Render (Stage 4) поверх уже готового
 // grpcclient.Client.RenderDocument — типы Format/Result берутся напрямую из
-// grpcclient (тот же приём, что internal/agent.RagSearcher использует
-// grpcclient.RagMatch: не дублировать чужой тип ради формального разделения
-// пакетов, BACKEND_CODING_STANDARDS.md §1.1).
+// grpcclient: не дублировать чужой тип ради формального разделения
+// пакетов (BACKEND_CODING_STANDARDS.md §1.1).
 type Renderer interface {
 	RenderDocument(ctx context.Context, title string, sections []domain.Finding, format grpcclient.RenderFormat) (grpcclient.RenderResult, error)
 }
@@ -191,9 +191,9 @@ func New(threads ThreadStore, files FileStore, balance BalanceService, cat Servi
 // §4.4): списывает "doc" (та же логика, что и §4.2 для "qa" — недостаточно
 // баланса возвращается как billing.ErrInsufficientBalance, клиент делает
 // POST /payments/checkout {items:[{service_id:"doc",qty:1}], thread_id} +
-// confirm и повторяет вызов — ActivateAfterPayment треда тут не участвует,
-// он активирует только Queued-неоплаченный тред, для уже существующего
-// оплаченного треда это no-op, см. thread.Service.ActivateAfterPayment),
+// confirm и повторяет вызов — thread.Service.Resume тут не участвует,
+// он активирует только неоплаченный тред (awaiting_payment), для уже
+// оплаченного треда это no-op),
 // вызывает LLM (AgentPrompt(document)), сохраняет ответ ассистента в тред,
 // рендерит PDF и DOCX.
 //
@@ -203,7 +203,7 @@ func New(threads ThreadStore, files FileStore, balance BalanceService, cat Servi
 // doc-кредит возвращается") — НЕ ошибка транспорта, assistantMsg к этому
 // моменту уже закоммичен в БД и должен быть отдан клиенту как обычный
 // успешный ответ (тот же принцип, что confirmPaymentHandler делает для
-// ActivateAfterPayment: платёж уже успешен, тред просто не стартовал
+// thread.Service.Resume: платёж уже успешен, тред просто не стартовал
 // синхронно вместе с ним — клиент разберётся через отдельный запрос,
 // здесь — GET /threads/{id}/document, который вернёт ErrNotGenerated, пока
 // клиент не попробует Generate ещё раз). error != nil — операция не
@@ -229,7 +229,7 @@ func (s *Service) Generate(ctx context.Context, threadID, sessionID string) (dom
 	}
 	l.Info("balance_checked", slog.Group("context", slog.String("service_id", serviceID)))
 
-	history, err := s.threads.GetMessages(ctx, threadID)
+	history, err := s.threads.GetConversation(ctx, threadID)
 	if err != nil {
 		s.refund(ctx, l, sessionID)
 		return domain.Message{}, false, fmt.Errorf("document: load history: %w", err)
@@ -243,16 +243,15 @@ func (s *Service) Generate(ctx context.Context, threadID, sessionID string) (dom
 
 	processingTimeMs := int(s.clock.Now().Sub(started).Milliseconds())
 	assistantMsg := domain.Message{
-		ID:                s.idgen.NewID(),
-		ThreadID:          t.ID,
-		Sender:            domain.MessageSenderAssistant,
-		InputType:         domain.MessageInputTypeText,
-		Text:              genResult.AnswerText,
-		Sources:           genResult.Sources,
-		Findings:          genResult.Findings,
-		UnverifiedSources: genResult.UnverifiedSources,
-		ProcessingTimeMs:  &processingTimeMs,
-		CreatedAt:         s.clock.Now(),
+		ID:               s.idgen.NewID(),
+		ThreadID:         t.ID,
+		Sender:           domain.MessageSenderAssistant,
+		InputType:        domain.MessageInputTypeText,
+		Text:             genResult.AnswerText,
+		Sources:          genResult.Sources,
+		Findings:         genResult.Findings,
+		ProcessingTimeMs: &processingTimeMs,
+		CreatedAt:        s.clock.Now(),
 	}
 	if _, err := s.threads.AppendMessage(ctx, assistantMsg); err != nil {
 		// Ничего ещё не показано пользователю — полный возврат кредита, как

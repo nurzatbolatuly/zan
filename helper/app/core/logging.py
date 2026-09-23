@@ -16,7 +16,7 @@
 ``slog.Group("context", ...)`` на стороне Go (см. internal/platform/logger
 в backend/), а не расползутся по верхнему уровню записи:
 
-    logger.info("rag_search_completed", context={"matches_count": 3})
+    logger.info("file_extract_completed", context={"extracted_chars": 1024})
 
 ``trace_id``/``session_id`` — не статические поля, а contextvars
 (structlog.contextvars), которые серверный gRPC-интерцептор биндит на вход

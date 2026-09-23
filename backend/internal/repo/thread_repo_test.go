@@ -17,9 +17,9 @@ func newTestThread(id, sessionID string, now time.Time) domain.Thread {
 		ID:            id,
 		SessionID:     sessionID,
 		ServiceID:     "qa",
-		Status:        domain.ThreadStatusQueued,
+		Status:        domain.ThreadStatusAwaitingPayment,
 		Title:         "Как оформить развод?",
-		PreviewText:   "Запрос в очереди…",
+		PreviewText:   "Ожидает оплаты",
 		MessageCount:  1,
 		CreatedAt:     now,
 		LastMessageAt: &now,
@@ -50,9 +50,8 @@ func TestThreadRepo_CreateThread_InsertsThreadAndFirstMessage(t *testing.T) {
 		newTestUserMessage("33333333-3333-3333-3333-333333333333", now))
 
 	require.NoError(t, err)
-	require.Equal(t, domain.ThreadStatusQueued, created.Status)
+	require.Equal(t, domain.ThreadStatusAwaitingPayment, created.Status)
 	require.Equal(t, 1, created.MessageCount)
-	require.False(t, created.IsPaid)
 	require.Equal(t, domain.MessageSenderUser, msg.Sender)
 
 	got, err := threadRepo.GetByID(context.Background(), created.ID)
@@ -89,14 +88,13 @@ func TestThreadRepo_AppendMessage_IncrementsCounters(t *testing.T) {
 
 	later := now.Add(time.Minute)
 	updated, err := threadRepo.AppendMessage(context.Background(), domain.Message{
-		ID:                "77777777-7777-7777-7777-777777777777",
-		ThreadID:          created.ID,
-		Sender:            domain.MessageSenderAssistant,
-		InputType:         domain.MessageInputTypeText,
-		Text:              "Ответ ассистента",
-		Sources:           []domain.Source{{Ref: "ст. 15 ЗоБС", Quote: "..."}},
-		UnverifiedSources: true,
-		CreatedAt:         later,
+		ID:        "77777777-7777-7777-7777-777777777777",
+		ThreadID:  created.ID,
+		Sender:    domain.MessageSenderAssistant,
+		InputType: domain.MessageInputTypeText,
+		Text:      "Ответ ассистента",
+		Sources:   []domain.Source{{Ref: "ст. 15 ЗоБС", Quote: "..."}},
+		CreatedAt: later,
 	})
 
 	require.NoError(t, err)
@@ -107,8 +105,6 @@ func TestThreadRepo_AppendMessage_IncrementsCounters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	require.Equal(t, []domain.Source{{Ref: "ст. 15 ЗоБС", Quote: "..."}}, msgs[1].Sources)
-	require.True(t, msgs[1].UnverifiedSources)
-	require.False(t, msgs[0].UnverifiedSources, "user message defaults to false")
 }
 
 func TestThreadRepo_UpdateStatus_GuardedByFromStatus(t *testing.T) {
@@ -125,70 +121,16 @@ func TestThreadRepo_UpdateStatus_GuardedByFromStatus(t *testing.T) {
 	require.NoError(t, err)
 
 	updated, ok, err := threadRepo.UpdateStatus(context.Background(), created.ID,
-		[]domain.ThreadStatus{domain.ThreadStatusQueued}, domain.ThreadStatusProcessing, "Ассистент готовит ответ…")
+		[]domain.ThreadStatus{domain.ThreadStatusAwaitingPayment}, domain.ThreadStatusProcessing, "Ассистент готовит ответ…")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, domain.ThreadStatusProcessing, updated.Status)
 
-	// Гонка/повторный вызов: статус уже не Queued -> ok=false, не ошибка.
+	// Гонка/повторный вызов: статус уже не AwaitingPayment -> ok=false, не ошибка.
 	_, ok, err = threadRepo.UpdateStatus(context.Background(), created.ID,
-		[]domain.ThreadStatus{domain.ThreadStatusQueued}, domain.ThreadStatusProcessing, "x")
+		[]domain.ThreadStatus{domain.ThreadStatusAwaitingPayment}, domain.ThreadStatusProcessing, "x")
 	require.NoError(t, err)
 	require.False(t, ok)
-}
-
-func TestThreadRepo_ActivatePaid_SetsIsPaidAndFreeUntil(t *testing.T) {
-	pool := setupTestDB(t)
-	sessionRepo := repo.NewSessionRepo(pool)
-	sess := newTestSession("bbbbbbbb-1111-1111-1111-111111111111", time.Now().UTC())
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
-
-	threadRepo := repo.NewThreadRepo(pool)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	created, _, err := threadRepo.CreateThread(context.Background(),
-		newTestThread("cccccccc-1111-1111-1111-111111111111", sess.ID, now),
-		newTestUserMessage("dddddddd-1111-1111-1111-111111111111", now))
-	require.NoError(t, err)
-	require.False(t, created.IsPaid)
-
-	freeUntil := now.Add(72 * time.Hour)
-	activated, ok, err := threadRepo.ActivatePaid(context.Background(), created.ID, now, freeUntil, "Ассистент готовит ответ…")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.True(t, activated.IsPaid)
-	require.Equal(t, domain.ThreadStatusProcessing, activated.Status)
-	require.WithinDuration(t, freeUntil, *activated.FreeUntil, time.Second)
-
-	// Повторная активация — идемпотентно, ok=false (уже не Queued/is_paid=true).
-	_, ok, err = threadRepo.ActivatePaid(context.Background(), created.ID, now, freeUntil, "x")
-	require.NoError(t, err)
-	require.False(t, ok)
-}
-
-func TestThreadRepo_CloseIfExpired_IsIdempotent(t *testing.T) {
-	pool := setupTestDB(t)
-	sessionRepo := repo.NewSessionRepo(pool)
-	sess := newTestSession("eeeeeeee-1111-1111-1111-111111111111", time.Now().UTC())
-	require.NoError(t, sessionRepo.Create(context.Background(), sess))
-
-	threadRepo := repo.NewThreadRepo(pool)
-	now := time.Now().UTC().Truncate(time.Microsecond)
-	created, _, err := threadRepo.CreateThread(context.Background(),
-		newTestThread("ffffffff-1111-1111-1111-111111111111", sess.ID, now),
-		newTestUserMessage("11111111-2222-2222-2222-222222222222", now))
-	require.NoError(t, err)
-
-	closedNow, err := threadRepo.CloseIfExpired(context.Background(), created.ID, now)
-	require.NoError(t, err)
-	require.True(t, closedNow)
-
-	closedAgain, err := threadRepo.CloseIfExpired(context.Background(), created.ID, now.Add(time.Hour))
-	require.NoError(t, err)
-	require.False(t, closedAgain, "уже закрыт — второй вызов не переустанавливает closed_at")
-
-	got, err := threadRepo.GetByID(context.Background(), created.ID)
-	require.NoError(t, err)
-	require.WithinDuration(t, now, *got.ClosedAt, time.Second)
 }
 
 func TestThreadRepo_SoftDelete_ExcludesFromListAndGetByID(t *testing.T) {
@@ -243,7 +185,7 @@ func TestThreadRepo_ListThreads_FiltersByStatusSearchAndPaginates(t *testing.T) 
 		require.NoError(t, err)
 	}
 	makeThread("66666666-0001-0001-0001-000000000001", "66666666-0001-0001-0001-100000000001", "Развод и алименты", domain.ThreadStatusDone, base)
-	makeThread("66666666-0002-0002-0002-000000000002", "66666666-0002-0002-0002-100000000002", "Трудовой договор", domain.ThreadStatusQueued, base.Add(time.Second))
+	makeThread("66666666-0002-0002-0002-000000000002", "66666666-0002-0002-0002-100000000002", "Трудовой договор", domain.ThreadStatusAwaitingPayment, base.Add(time.Second))
 	makeThread("66666666-0003-0003-0003-000000000003", "66666666-0003-0003-0003-100000000003", "Развод без детей", domain.ThreadStatusDone, base.Add(2*time.Second))
 
 	items, total, err := threadRepo.ListThreads(context.Background(), sess.ID, thread.ListFilter{
@@ -286,4 +228,40 @@ func TestThreadRepo_SetMessageFeedback_OnlyOwnSessionMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, updated.Feedback)
 	require.Equal(t, domain.MessageFeedbackDislike, *updated.Feedback)
+}
+
+func TestThreadRepo_GetMessagesAndConversation_AttachFilesToTheirMessage(t *testing.T) {
+	pool := setupTestDB(t)
+	sessionRepo := repo.NewSessionRepo(pool)
+	sess := newTestSession("11111111-6666-6666-6666-666666666666", time.Now().UTC())
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	threadRepo := repo.NewThreadRepo(pool)
+	fileRepo := repo.NewFileRepo(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	created, msg, err := threadRepo.CreateThread(context.Background(),
+		newTestThread("22222222-6666-6666-6666-666666666666", sess.ID, now),
+		newTestUserMessage("33333333-6666-6666-6666-666666666666", now))
+	require.NoError(t, err)
+
+	f, err := fileRepo.Create(context.Background(), newTestFileAttachment("44444444-6666-6666-6666-666666666666", sess.ID, now))
+	require.NoError(t, err)
+	extracted := "ДОГОВОР АРЕНДЫ"
+	require.NoError(t, fileRepo.SetProcessingResult(context.Background(), f.ID, domain.FileProcessingStatusProcessed, &extracted))
+	require.NoError(t, fileRepo.AttachToMessage(context.Background(), msg.ID, []string{f.ID}))
+
+	conversation, err := threadRepo.GetConversation(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Len(t, conversation, 1)
+	require.Len(t, conversation[0].Attachments, 1)
+	require.Equal(t, "contract.pdf", conversation[0].Attachments[0].OriginalName)
+	require.Equal(t, extracted, *conversation[0].Attachments[0].ExtractedText)
+
+	// REST-история — метаданные вложения без извлечённого текста.
+	msgs, err := threadRepo.GetMessages(context.Background(), created.ID)
+	require.NoError(t, err)
+	require.Len(t, msgs[0].Attachments, 1)
+	require.Equal(t, f.ID, msgs[0].Attachments[0].ID)
+	require.Nil(t, msgs[0].Attachments[0].ExtractedText)
 }

@@ -1,12 +1,17 @@
 // Package thread — юзкейсы переписки (BACKEND_PLAN.md Stage 3): создание
 // Thread/Message, статус-машина (domain.ThreadStatus), списание/возврат
-// баланса за услугу треда, синхронный вызов Agent (internal/agent.Client,
-// Stage 5 — реальный вызов LLM, до этого — StubAgent, Stage 3, удалён
-// вместе с подключением реального агента). Оркестрирует четыре порта —
-// Repository, BalanceService, ServiceCatalog, Agent — все объявлены здесь,
-// где используются, реализации живут в internal/repo,
-// internal/service/billing, internal/service/catalog, internal/agent
-// (BACKEND_CODING_STANDARDS.md §1.1).
+// баланса за услугу треда, вызов Agent (internal/agent.Client, Stage 5 —
+// реальный вызов LLM, до этого — StubAgent, Stage 3, удалён вместе с
+// подключением реального агента). Обработка — фоновая (Stage 9, WS-
+// стриминг, см. dispatchProcessing): CreateThread/AddMessage возвращаются
+// сразу после перехода в Processing, Agent.Process выполняется в отдельной
+// горутине, живые события (статус/токены ответа) идут через EventPublisher,
+// REST (GET /threads/{id}) остаётся источником правды независимо от того,
+// слушает ли кто-то WS. Оркестрирует пять портов — Repository,
+// BalanceService, ServiceCatalog, Agent, EventPublisher — все объявлены
+// здесь, где используются, реализации живут в internal/repo,
+// internal/service/billing, internal/service/catalog, internal/agent,
+// internal/wshub (BACKEND_CODING_STANDARDS.md §1.1).
 package thread
 
 import (
@@ -39,14 +44,13 @@ const (
 	previewMaxRunes = 140
 
 	// Системные тексты preview_text для нетерминальных статусов —
-	// zan-backend-tz-v2.md §4.5, буквально: "Ассистент готовит ответ…" /
-	// "Запрос в очереди…". Локализация (ru/kz) вне скоупа backend на этом
+	// zan-backend-tz-v2.md §4.5. Локализация (ru/kz) вне скоупа backend на этом
 	// этапе — тот же прецедент, что и apierror-сообщения (например,
 	// billing.go "Оплата не прошла. Попробовать снова"), всегда на русском.
-	previewQueued     = "Запрос в очереди…"
-	previewProcessing = "Ассистент готовит ответ…"
-	previewError      = "Не удалось обработать запрос"
-	previewCanceled   = "Обращение отменено"
+	previewAwaitingPayment = "Ожидает оплаты"
+	previewProcessing      = "Ассистент готовит ответ…"
+	previewError           = "Не удалось обработать запрос"
+	previewCanceled        = "Обращение отменено"
 )
 
 var (
@@ -60,33 +64,22 @@ var (
 	// треду другой сессии (POST /messages/{id}/feedback).
 	ErrMessageNotFound = errors.New("thread: message not found")
 
-	// ErrThreadClosed — free_until истёк (zan-backend-tz-v2.md §4.3): новое
-	// сообщение по теме — новый тред.
-	ErrThreadClosed = errors.New("thread: closed, start a new thread")
-
 	// ErrThreadNotActive — тред в терминальном статусе (error/canceled),
-	// продолжить его нельзя — по аналогии с §4.3, начинается новый тред.
+	// продолжить его нельзя — начинается новый тред.
 	ErrThreadNotActive = errors.New("thread: not active, start a new thread")
 
-	// ErrPaymentRequired — POST /threads/{id}/messages на тред, который
-	// ещё не оплачен (queued, is_paid=false) — клиент должен сперва
-	// провести checkout/confirm за этот thread_id (zan-backend-tz-v2.md §4.2 п.2).
-	ErrPaymentRequired = errors.New("thread: payment required")
-
-	// ErrThreadBusy — тред уже обрабатывается (status=processing).
-	// Agent.Process (Stage 5 — internal/agent.Client, реальный вызов LLM)
-	// по-прежнему синхронный, в пределах одного HTTP-запроса (Strategy,
-	// смена реализации не потребовала менять этот контракт) — практически
-	// недостижимо тем же способом, что и раньше со StubAgent, разве что
-	// два параллельных запроса на один thread_id физически совпадут по
-	// времени. Переход на асинхронную обработку (если понадобится из-за
-	// латентности LLM) — пересмотр вне скоупа Stage 5, статус-машина уже
-	// на него рассчитана.
+	// ErrThreadBusy — тред уже обрабатывается (status=processing). С Stage 9
+	// (фоновая обработка, dispatchProcessing) это ожидаемый путь, не
+	// теоретический край: пока идёт фоновый раунд (streaming-вызов LLM,
+	// может занимать секунды), конкурентный
+	// AddMessage на тот же thread_id закономерно встречает статус
+	// Processing и получает эту ошибку через тот же атомарный
+	// UpdateStatus(WHERE status=ANY(from)), что и раньше.
 	ErrThreadBusy = errors.New("thread: already processing")
 
 	// ErrCannotCancel — POST /threads/{id}/cancel вне допустимых статусов
 	// (zan-backend-tz-v2.md §3.2: "до оплаты или во время обработки" —
-	// только Queued/Processing, см. domain.ThreadStatus.CanTransitionTo).
+	// только AwaitingPayment/Processing, см. domain.ThreadStatus.CanTransitionTo).
 	ErrCannotCancel = errors.New("thread: cannot be canceled in current status")
 
 	// ErrUnsupportedInputType — voice/file приняты доменной моделью (схема
@@ -113,7 +106,7 @@ type ListFilter struct {
 }
 
 // Repository — порт доступа к Thread/Message. Составные операции
-// (CreateThread, AppendMessage, UpdateStatus, ActivatePaid) — по тому же
+// (CreateThread, AppendMessage, UpdateStatus) — по тому же
 // принципу, что и billing.Repository (BACKEND_CODING_STANDARDS.md §1.1):
 // осмысленные атомарные юзкейсы, не набор сырых CRUD-примитивов, которые
 // service собирал бы в транзакцию сам.
@@ -124,6 +117,9 @@ type Repository interface {
 	GetByID(ctx context.Context, id string) (domain.Thread, error)
 	// GetMessages — все сообщения треда, от старых к новым.
 	GetMessages(ctx context.Context, threadID string) ([]domain.Message, error)
+	// GetConversation — GetMessages плюс вложения пользователя с извлечённым
+	// текстом (domain.Message.Attachments) — история для агента.
+	GetConversation(ctx context.Context, threadID string) ([]domain.Message, error)
 	ListThreads(ctx context.Context, sessionID string, filter ListFilter) ([]domain.Thread, int, error)
 
 	// AppendMessage — вставляет сообщение и атомарно увеличивает
@@ -135,17 +131,6 @@ type Repository interface {
 	// что billing_repo.ConfirmPayment: ok=false — статус уже не из from
 	// (гонка/повторный вызов), не ошибка транспорта.
 	UpdateStatus(ctx context.Context, id string, from []domain.ThreadStatus, to domain.ThreadStatus, previewText string) (domain.Thread, bool, error)
-
-	// ActivatePaid — WHERE status=Queued AND is_paid=false: списание уже
-	// произошло (billing.ConfirmPayment), проставляет is_paid/paid_at/
-	// free_until и переводит в Processing одной атомарной операцией
-	// (zan-backend-tz-v2.md §4.2 п.2, "купил и тут же потратил"). ok=false
-	// — тред уже активирован (повторный confirm) или не в Queued.
-	ActivatePaid(ctx context.Context, id string, paidAt, freeUntil time.Time, previewText string) (domain.Thread, bool, error)
-
-	// CloseIfExpired — идемпотентно проставляет closed_at, если ещё не
-	// проставлен (WHERE closed_at IS NULL). true — реально закрыл сейчас.
-	CloseIfExpired(ctx context.Context, id string, now time.Time) (bool, error)
 
 	// SoftDelete — WHERE deleted_at IS NULL, идемпотентно. false — уже был
 	// удалён (репозиторий не различает "не найден"/"уже удалён" наружу —
@@ -197,37 +182,70 @@ type FileAttacher interface {
 	ValidateAvailable(ctx context.Context, sessionID string, fileIDs []string) error
 	// AttachToMessage — вызывается ПОСЛЕ успешного создания сообщения, не в
 	// одной транзакции с ним — тот же принятый компромисс, что
-	// billing.ConfirmPayment -> ActivateAfterPayment (Stage 3): изолированный
+	// billing.ConfirmPayment -> Resume (Stage 3): изолированный
 	// неуспех здесь логируется, но не откатывает уже созданное сообщение.
 	AttachToMessage(ctx context.Context, messageID string, fileIDs []string) error
 }
 
 // Service — бизнес-логика переписки (BACKEND_PLAN.md Stage 3/4).
 type Service struct {
-	repo         Repository
-	balance      BalanceService
-	catalog      ServiceCatalog
-	files        FileAttacher
-	agent        Agent
-	clock        clock.Clock
-	idgen        idgen.Generator
-	freeUntilTTL time.Duration
+	repo    Repository
+	balance BalanceService
+	catalog ServiceCatalog
+	files   FileAttacher
+	agent   Agent
+	events  EventPublisher
+	clock   clock.Clock
+	idgen   idgen.Generator
 }
 
-// New собирает Service с внедрёнными зависимостями. freeUntilTTL —
-// конфигурируемое окно бесплатных уточнений (zan-backend-tz-v2.md §4.3,
-// config.Config.ThreadFreeUntil, дефолт 72 часа).
-func New(repo Repository, balance BalanceService, cat ServiceCatalog, files FileAttacher, agent Agent, clk clock.Clock, ids idgen.Generator, freeUntilTTL time.Duration) *Service {
+// New собирает Service с внедрёнными зависимостями. events — Stage 9,
+// живые WS-события обработки (internal/wshub.Hub в cmd/api).
+func New(repo Repository, balance BalanceService, cat ServiceCatalog, files FileAttacher, agent Agent, events EventPublisher, clk clock.Clock, ids idgen.Generator) *Service {
 	return &Service{
-		repo:         repo,
-		balance:      balance,
-		catalog:      cat,
-		files:        files,
-		agent:        agent,
-		clock:        clk,
-		idgen:        ids,
-		freeUntilTTL: freeUntilTTL,
+		repo:    repo,
+		balance: balance,
+		catalog: cat,
+		files:   files,
+		agent:   agent,
+		events:  events,
+		clock:   clk,
+		idgen:   ids,
 	}
+}
+
+// dispatchProcessing запускает fn в отдельной горутине, панико-безопасно
+// (Stage 9 — фоновая обработка вне HTTP-запроса, gin отменяет
+// c.Request.Context() сразу после возврата хендлера, поэтому fn получает
+// bgCtx на базе context.Background(), а не ctx запроса — иначе фоновый
+// вызов Agent.Process отменяется мгновенно). trace_id из ctx запроса
+// переносится в bgCtx явно (WithTraceID) — иначе фоновые логи потеряли бы
+// связь с исходным запросом, context.Background() их не несёт. Паника
+// внутри fn — не уроненный процесс: recover переводит тред в Error с
+// возвратом кредита тем же путём, что обычный сбой агента
+// (finishWithError), чтобы тред не завис в Processing навсегда молча.
+func (s *Service) dispatchProcessing(ctx context.Context, l *slog.Logger, t domain.Thread, started time.Time, fn func(bgCtx context.Context)) {
+	bgCtx := logger.WithContext(context.Background(), l)
+	if traceID, ok := logger.TraceIDFromContext(ctx); ok {
+		bgCtx = logger.WithTraceID(bgCtx, traceID)
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				l.Log(bgCtx, logger.LevelCritical, "panic_recovered_background", slog.Group("context",
+					slog.String("thread_id", t.ID),
+					slog.Any("recovered", r),
+				))
+				if _, err := s.finishWithError(bgCtx, l, t, started); err != nil {
+					l.Error("panic_recovery_finish_failed", slog.Group("context",
+						slog.String("thread_id", t.ID),
+						slog.String("error", err.Error()),
+					))
+				}
+			}
+		}()
+		fn(bgCtx)
+	}()
 }
 
 // CreateThreadRequest — вход POST /threads (zan-backend-tz-v2.md §3.2:
@@ -241,12 +259,13 @@ type CreateThreadRequest struct {
 	FileIDs   []string
 }
 
-// CreateThread — POST /threads. Если баланс sessionID по ServiceID
-// достаточен — списывает 1 единицу и синхронно запускает обработку
-// (Queued -> Processing -> Done/Clarify/Error, zan-backend-tz-v2.md §4.2 п.2);
-// иначе создаёт тред неоплаченным (Queued, is_paid=false) — клиент
-// проводит POST /payments/checkout {..., thread_id} и Stage3-хук на
-// confirm (ActivateAfterPayment) достроит остальное.
+// CreateThread — POST /threads. Тред с вопросом сохраняется в
+// AwaitingPayment и сразу пытается оплатиться с баланса
+// (activateFromBalance): хватило — Processing, обработка в фоне (Stage 9 —
+// возвращается сразу, ответ ассистента приходит через GET /ws/threads/{id});
+// не хватило — остаётся AwaitingPayment: клиент либо платит сразу
+// (checkout {..., thread_id} -> confirm -> Resume), либо позже пополняет
+// баланс и вызывает Resume/AddMessage сам (zan-backend-tz-v2.md §4.2 п.2).
 func (s *Service) CreateThread(ctx context.Context, req CreateThreadRequest) (domain.Thread, error) {
 	started := s.clock.Now()
 	l := logger.FromContext(ctx)
@@ -264,28 +283,17 @@ func (s *Service) CreateThread(ctx context.Context, req CreateThreadRequest) (do
 		return domain.Thread{}, err
 	}
 
-	paid, err := s.tryDebit(ctx, l, req.SessionID, req.ServiceID)
-	if err != nil {
-		return domain.Thread{}, fmt.Errorf("thread: create: %w", err)
-	}
-
 	now := s.clock.Now()
 	newThread := domain.Thread{
 		ID:            s.idgen.NewID(),
 		SessionID:     req.SessionID,
 		ServiceID:     req.ServiceID,
-		Status:        domain.ThreadStatusQueued,
+		Status:        domain.ThreadStatusAwaitingPayment,
 		Title:         deriveTitle(titleSource(text)),
-		PreviewText:   previewQueued,
+		PreviewText:   previewAwaitingPayment,
 		MessageCount:  1,
 		CreatedAt:     now,
 		LastMessageAt: &now,
-	}
-	if paid {
-		newThread.IsPaid = true
-		newThread.PaidAt = &now
-		freeUntil := now.Add(s.freeUntilTTL)
-		newThread.FreeUntil = &freeUntil
 	}
 	firstMessage := domain.Message{
 		ID:        s.idgen.NewID(),
@@ -303,20 +311,7 @@ func (s *Service) CreateThread(ctx context.Context, req CreateThreadRequest) (do
 	l.Info("message_saved", slog.Group("context", slog.String("message_id", savedMsg.ID)))
 	s.attachFiles(ctx, l, savedMsg.ID, req.FileIDs)
 
-	if !paid {
-		l.Info("payment_required", slog.Group("context", slog.String("service_id", req.ServiceID)))
-		s.logResponseSent(l, started, created.Status)
-		return created, nil
-	}
-
-	begun, ok, err := s.beginProcessing(ctx, l, created.ID, domain.ThreadStatusQueued)
-	if err != nil {
-		return domain.Thread{}, err
-	}
-	if !ok {
-		return s.refetch(ctx, created.ID)
-	}
-	return s.runAgentAndFinish(ctx, l, begun, true, req.Language, started)
+	return s.activateFromBalance(ctx, l, created, req.Language, started)
 }
 
 // GetThread — GET /threads/{id}: тред + все сообщения, только владелец
@@ -373,9 +368,10 @@ type AddMessageRequest struct {
 	FileIDs   []string
 }
 
-// AddMessage — POST /threads/{id}/messages: уточнение внутри треда.
-// Бесплатно, пока status IN (Done, Clarify) и now() < free_until
-// (zan-backend-tz-v2.md §4.3) — баланс не списывается повторно.
+// AddMessage — POST /threads/{id}/messages: новый вопрос в треде. Один
+// вопрос = одна консультация: сообщение сохраняется, тред (Done ->)
+// AwaitingPayment пытается оплатиться с баланса (activateFromBalance);
+// не хватило — остаётся AwaitingPayment вместе с новым вопросом.
 func (s *Service) AddMessage(ctx context.Context, req AddMessageRequest) (domain.Thread, error) {
 	started := s.clock.Now()
 	l := logger.FromContext(ctx).With(slog.String("thread_id", req.ThreadID))
@@ -397,21 +393,9 @@ func (s *Service) AddMessage(ctx context.Context, req AddMessageRequest) (domain
 		return domain.Thread{}, ErrThreadNotFound
 	}
 
-	now := s.clock.Now()
-	if t.IsClosed(now) {
-		if t.ClosedAt == nil {
-			if _, err := s.repo.CloseIfExpired(ctx, t.ID, now); err != nil {
-				return domain.Thread{}, fmt.Errorf("thread: close expired: %w", err)
-			}
-		}
-		return domain.Thread{}, ErrThreadClosed
-	}
-
 	switch t.Status {
-	case domain.ThreadStatusDone, domain.ThreadStatusClarify:
-		// продолжение диалога — бесплатно в пределах free_until, уже проверено выше.
-	case domain.ThreadStatusQueued:
-		return domain.Thread{}, ErrPaymentRequired
+	case domain.ThreadStatusDone, domain.ThreadStatusAwaitingPayment:
+		// Можно задать новый вопрос — оплата после сохранения ниже.
 	case domain.ThreadStatusProcessing:
 		return domain.Thread{}, ErrThreadBusy
 	default: // Error, Canceled — терминальные статусы.
@@ -425,7 +409,7 @@ func (s *Service) AddMessage(ctx context.Context, req AddMessageRequest) (domain
 		Sender:    domain.MessageSenderUser,
 		InputType: req.InputType,
 		Text:      text,
-		CreatedAt: now,
+		CreatedAt: s.clock.Now(),
 	}
 	updated, err := s.repo.AppendMessage(ctx, msg)
 	if err != nil {
@@ -434,24 +418,29 @@ func (s *Service) AddMessage(ctx context.Context, req AddMessageRequest) (domain
 	l.Info("message_saved", slog.Group("context", slog.String("message_id", msg.ID)))
 	s.attachFiles(ctx, l, msg.ID, req.FileIDs)
 
-	begun, ok, err := s.beginProcessing(ctx, l, updated.ID, fromStatus)
-	if err != nil {
-		return domain.Thread{}, err
+	if fromStatus == domain.ThreadStatusDone {
+		awaiting, ok, err := s.repo.UpdateStatus(ctx, updated.ID, []domain.ThreadStatus{domain.ThreadStatusDone}, domain.ThreadStatusAwaitingPayment, previewAwaitingPayment)
+		if err != nil {
+			return domain.Thread{}, fmt.Errorf("thread: await payment for new question: %w", err)
+		}
+		if !ok {
+			// Параллельный запрос уже начал новый раунд этого треда.
+			return s.refetch(ctx, updated.ID)
+		}
+		logTransition(l, domain.ThreadStatusDone, domain.ThreadStatusAwaitingPayment)
+		updated = awaiting
 	}
-	if !ok {
-		return s.refetch(ctx, updated.ID)
-	}
-	refundEligible := fromStatus != domain.ThreadStatusDone
-	return s.runAgentAndFinish(ctx, l, begun, refundEligible, req.Language, started)
+	return s.activateFromBalance(ctx, l, updated, req.Language, started)
 }
 
-// ActivateAfterPayment — хук, вызываемый httpserver сразу после успешного
-// billing.Service.ConfirmPayment для платежа с непустым ThreadID
-// (zan-backend-tz-v2.md §4.2 п.2: "после confirm начисляется 1 единица и
-// сразу списывается по логике выше"). Идемпотентна: повторный вызов
-// (повторный confirm) на уже активированный тред — no-op, отдаёт текущее
-// состояние, не ошибку.
-func (s *Service) ActivateAfterPayment(ctx context.Context, threadID, sessionID string, lang domain.Language) (domain.Thread, error) {
+// Resume — POST /threads/{id}/resume («перезапустить вопрос») и хук после
+// успешного billing.ConfirmPayment с непустым ThreadID (confirm уже
+// начислил единицу на баланс — здесь она списывается). Неоплаченный тред
+// (AwaitingPayment) пытается оплатиться с баланса и стартовать с уже
+// сохранённой историей; в любом другом статусе — no-op, отдаёт текущее
+// состояние (идемпотентно: повторный confirm/двойной клик не списывает
+// повторно). Баланса нет — тред остаётся AwaitingPayment, не ошибка.
+func (s *Service) Resume(ctx context.Context, threadID, sessionID string, lang domain.Language) (domain.Thread, error) {
 	started := s.clock.Now()
 	t, err := s.repo.GetByID(ctx, threadID)
 	if err != nil {
@@ -460,28 +449,15 @@ func (s *Service) ActivateAfterPayment(ctx context.Context, threadID, sessionID 
 	if t.SessionID != sessionID || t.IsDeleted() {
 		return domain.Thread{}, ErrThreadNotFound
 	}
-	if t.Status != domain.ThreadStatusQueued || t.IsPaid {
+	if t.Status != domain.ThreadStatusAwaitingPayment {
 		return t, nil
 	}
-
 	l := logger.FromContext(ctx).With(slog.String("thread_id", t.ID))
-	now := s.clock.Now()
-	freeUntil := now.Add(s.freeUntilTTL)
-	activated, ok, err := s.repo.ActivatePaid(ctx, t.ID, now, freeUntil, previewProcessing)
-	if err != nil {
-		return domain.Thread{}, fmt.Errorf("thread: activate after payment: %w", err)
-	}
-	if !ok {
-		return s.refetch(ctx, t.ID)
-	}
-	l.Info("payment_confirmed", slog.Group("context", slog.String("service_id", t.ServiceID)))
-	logTransition(l, domain.ThreadStatusQueued, domain.ThreadStatusProcessing)
-
-	return s.runAgentAndFinish(ctx, l, activated, true, lang, started)
+	return s.activateFromBalance(ctx, l, t, lang, started)
 }
 
 // CancelThread — POST /threads/{id}/cancel: статус -> Canceled, только из
-// Queued/Processing (zan-backend-tz-v2.md §3.2 — "до оплаты или во время
+// AwaitingPayment/Processing (zan-backend-tz-v2.md §3.2 — "до оплаты или во время
 // обработки", domain.ThreadStatus.CanTransitionTo). Кредит не возвращается
 // (в отличие от Error) — не задано ТЗ явно для отмены, только для ошибки
 // (§4.2 п.3).
@@ -578,80 +554,99 @@ func creditQuantity(credits []domain.UserCredit, serviceID string) int {
 	return 0
 }
 
-// beginProcessing — гарантированный переход from -> Processing
-// (WHERE status=from), логирует thread_status_changed при успехе.
-// ok=false — статус уже не from (гонка/повторный вызов), не ошибка.
-func (s *Service) beginProcessing(ctx context.Context, l *slog.Logger, id string, from domain.ThreadStatus) (domain.Thread, bool, error) {
-	t, ok, err := s.repo.UpdateStatus(ctx, id, []domain.ThreadStatus{from}, domain.ThreadStatusProcessing, previewProcessing)
+// activateFromBalance — единственный путь AwaitingPayment -> Processing:
+// списывает единицу услуги с баланса за текущий вопрос, атомарно переводит
+// тред в Processing (WHERE status=AwaitingPayment) и запускает обработку в
+// фоне. Баланса нет — тред остаётся AwaitingPayment (payment_required в
+// логе, не ошибка). Списали, но вопрос уже запущен параллельным запросом —
+// единица возвращается на баланс: платить дважды за один вопрос нельзя.
+func (s *Service) activateFromBalance(ctx context.Context, l *slog.Logger, t domain.Thread, lang domain.Language, started time.Time) (domain.Thread, error) {
+	paid, err := s.tryDebit(ctx, l, t.SessionID, t.ServiceID)
 	if err != nil {
-		return domain.Thread{}, false, fmt.Errorf("thread: begin processing: %w", err)
+		return domain.Thread{}, fmt.Errorf("thread: activate: %w", err)
 	}
-	if ok {
-		logTransition(l, from, domain.ThreadStatusProcessing)
+	if !paid {
+		l.Info("payment_required", slog.Group("context", slog.String("service_id", t.ServiceID)))
+		s.logResponseSent(l, started, t.Status)
+		return t, nil
 	}
-	return t, ok, nil
+
+	activated, ok, err := s.repo.UpdateStatus(ctx, t.ID, []domain.ThreadStatus{domain.ThreadStatusAwaitingPayment}, domain.ThreadStatusProcessing, previewProcessing)
+	if err != nil || !ok {
+		if refundErr := s.balance.RefundCredit(ctx, t.SessionID, t.ServiceID, 1); refundErr != nil {
+			return domain.Thread{}, fmt.Errorf("thread: activate: refund after failed activation: %w", refundErr)
+		}
+		if err != nil {
+			return domain.Thread{}, fmt.Errorf("thread: activate: %w", err)
+		}
+		return s.refetch(ctx, t.ID)
+	}
+	l.Info("payment_confirmed", slog.Group("context", slog.String("service_id", t.ServiceID)))
+	logTransition(l, domain.ThreadStatusAwaitingPayment, domain.ThreadStatusProcessing)
+	s.events.PublishStatus(ctx, activated.ID, domain.ThreadStatusProcessing, previewProcessing)
+
+	s.dispatchProcessing(ctx, l, activated, started, func(bgCtx context.Context) {
+		_, _ = s.runAgentAndFinish(bgCtx, l, activated, lang, started)
+	})
+	return activated, nil
 }
 
-// runAgentAndFinish — тред уже в Processing (переход в него сделан вызывающим
-// кодом — beginProcessing или ActivatePaid, у обоих своя механика
-// гарантированного перехода). Загружает историю, синхронно вызывает
-// Agent.Process, переводит в Done/Clarify/Error; при Error — возвращает
-// кредит, если refundEligible (тред ещё ни разу не получил успешный ответ —
-// zan-backend-tz-v2.md §4.2 п.3: повторная бесплатная попытка внутри
-// free_until не пере-возвращает уже потраченный при первом успехе кредит).
+// runAgentAndFinish — тред уже в Processing (переход сделан
+// activateFromBalance). Загружает историю, синхронно вызывает
+// Agent.Process, переводит в Done/Error; при Error — возвращает кредит,
+// списанный за этот вопрос (zan-backend-tz-v2.md §4.2 п.3).
 //
-// Этапы 7/8/9 из backend-roadmap.md §6.2 (rag_search_*/llm_call_*) здесь
-// НЕ логируются — этот уровень не знает промпта/RAG-кандидатов, которые
-// реально использовались (только internal/agent.Client их знает, Stage 5),
+// Этапы llm_call_* здесь НЕ логируются — этот уровень не знает промпта,
+// который реально использовался (только internal/agent.Client его знает),
 // поэтому логирует их сам internal/agent.Client.Process. Здесь остаются
 // только этапы, которые действительно видны на этом уровне: переход
 // статуса, сохранение сообщения, возврат кредита, response_sent.
-func (s *Service) runAgentAndFinish(ctx context.Context, l *slog.Logger, t domain.Thread, refundEligible bool, lang domain.Language, started time.Time) (domain.Thread, error) {
-	history, err := s.repo.GetMessages(ctx, t.ID)
+func (s *Service) runAgentAndFinish(ctx context.Context, l *slog.Logger, t domain.Thread, lang domain.Language, started time.Time) (domain.Thread, error) {
+	history, err := s.repo.GetConversation(ctx, t.ID)
 	if err != nil {
 		return domain.Thread{}, fmt.Errorf("thread: load history: %w", err)
 	}
 
-	result, err := s.agent.Process(ctx, AgentRequest{ThreadID: t.ID, ServiceID: t.ServiceID, Language: lang, History: history})
+	result, err := s.agent.Process(ctx, AgentRequest{
+		ThreadID:  t.ID,
+		ServiceID: t.ServiceID,
+		Language:  lang,
+		History:   history,
+		OnDelta:   func(delta string) { s.events.PublishAnswerDelta(ctx, t.ID, delta) },
+	})
 	if err != nil {
-		return s.finishWithError(ctx, l, t, refundEligible, started)
+		return s.finishWithError(ctx, l, t, started)
 	}
 
 	switch result.Status {
-	case AgentResultDone, AgentResultClarify:
-		return s.finishWithAnswer(ctx, l, t, result, started)
+	case AgentResultDone:
+		return s.finishWithAnswer(ctx, l, t, result.AnswerText, started)
 	case AgentResultError:
-		return s.finishWithError(ctx, l, t, refundEligible, started)
+		return s.finishWithError(ctx, l, t, started)
 	default:
 		return domain.Thread{}, fmt.Errorf("thread: unknown agent result status %q", result.Status)
 	}
 }
 
-func (s *Service) finishWithAnswer(ctx context.Context, l *slog.Logger, t domain.Thread, result AgentResult, started time.Time) (domain.Thread, error) {
-	to := domain.ThreadStatusDone
-	if result.Status == AgentResultClarify {
-		to = domain.ThreadStatusClarify
-	}
+func (s *Service) finishWithAnswer(ctx context.Context, l *slog.Logger, t domain.Thread, answerText string, started time.Time) (domain.Thread, error) {
+	const to = domain.ThreadStatusDone
 
 	processingTimeMs := int(s.clock.Now().Sub(started).Milliseconds())
 	assistantMsg := domain.Message{
-		ID:                s.idgen.NewID(),
-		ThreadID:          t.ID,
-		Sender:            domain.MessageSenderAssistant,
-		InputType:         domain.MessageInputTypeText,
-		Text:              result.AnswerText,
-		Sources:           result.Sources,
-		Findings:          result.Findings,
-		UnverifiedSources: result.UnverifiedSources,
-		ProcessingTimeMs:  &processingTimeMs,
-		CreatedAt:         s.clock.Now(),
+		ID:               s.idgen.NewID(),
+		ThreadID:         t.ID,
+		Sender:           domain.MessageSenderAssistant,
+		InputType:        domain.MessageInputTypeText,
+		Text:             answerText,
+		ProcessingTimeMs: &processingTimeMs,
+		CreatedAt:        s.clock.Now(),
 	}
 	if _, err := s.repo.AppendMessage(ctx, assistantMsg); err != nil {
 		return domain.Thread{}, fmt.Errorf("thread: save assistant message: %w", err)
 	}
 	l.Info("message_saved", slog.Group("context", slog.String("message_id", assistantMsg.ID)))
 
-	final, ok, err := s.repo.UpdateStatus(ctx, t.ID, []domain.ThreadStatus{domain.ThreadStatusProcessing}, to, previewFromAnswer(result.AnswerText))
+	final, ok, err := s.repo.UpdateStatus(ctx, t.ID, []domain.ThreadStatus{domain.ThreadStatusProcessing}, to, previewFromAnswer(answerText))
 	if err != nil {
 		return domain.Thread{}, fmt.Errorf("thread: finish processing: %w", err)
 	}
@@ -661,12 +656,13 @@ func (s *Service) finishWithAnswer(ctx context.Context, l *slog.Logger, t domain
 		}
 	} else {
 		logTransition(l, domain.ThreadStatusProcessing, to)
+		s.events.PublishAnswerDone(ctx, t.ID, assistantMsg, to)
 	}
 	s.logResponseSent(l, started, final.Status)
 	return final, nil
 }
 
-func (s *Service) finishWithError(ctx context.Context, l *slog.Logger, t domain.Thread, refundEligible bool, started time.Time) (domain.Thread, error) {
+func (s *Service) finishWithError(ctx context.Context, l *slog.Logger, t domain.Thread, started time.Time) (domain.Thread, error) {
 	final, ok, err := s.repo.UpdateStatus(ctx, t.ID, []domain.ThreadStatus{domain.ThreadStatusProcessing}, domain.ThreadStatusError, previewError)
 	if err != nil {
 		return domain.Thread{}, fmt.Errorf("thread: mark error: %w", err)
@@ -677,22 +673,21 @@ func (s *Service) finishWithError(ctx context.Context, l *slog.Logger, t domain.
 		}
 	} else {
 		logTransition(l, domain.ThreadStatusProcessing, domain.ThreadStatusError)
+		s.events.PublishError(ctx, t.ID, "internal_error", previewError)
 	}
 
-	if refundEligible {
-		if err := s.balance.RefundCredit(ctx, final.SessionID, final.ServiceID, 1); err != nil {
-			// Тред уже помечен Error, но возврат кредита не удался — деньги
-			// "зависли". Отдаём ошибку наверх (httpserver -> 500):
-			// расследуется по trace_id/thread_id в логах, повторный запрос
-			// клиента (GET /threads/{id}) увидит status=error и может
-			// послужить сигналом для ручного разбора.
-			return domain.Thread{}, fmt.Errorf("thread: refund credit: %w", err)
-		}
-		l.Warn("credit_refunded", slog.Group("context",
-			slog.String("service_id", final.ServiceID),
-			slog.String("session_id", final.SessionID),
-		))
+	if err := s.balance.RefundCredit(ctx, final.SessionID, final.ServiceID, 1); err != nil {
+		// Тред уже помечен Error, но возврат кредита не удался — деньги
+		// "зависли". Отдаём ошибку наверх: расследуется по
+		// trace_id/thread_id в логах, повторный запрос клиента
+		// (GET /threads/{id}) увидит status=error и может послужить
+		// сигналом для ручного разбора.
+		return domain.Thread{}, fmt.Errorf("thread: refund credit: %w", err)
 	}
+	l.Warn("credit_refunded", slog.Group("context",
+		slog.String("service_id", final.ServiceID),
+		slog.String("session_id", final.SessionID),
+	))
 	s.logResponseSent(l, started, domain.ThreadStatusError)
 	return final, nil
 }
@@ -766,7 +761,7 @@ func (s *Service) validateMessageInput(ctx context.Context, sessionID string, in
 // attachFiles — привязывает fileIDs к уже сохранённому сообщению. Отдельный
 // шаг после успешного создания сообщения (не в общей транзакции — см.
 // FileAttacher) — неуспех логируется и не откатывает уже созданное
-// сообщение, тот же принятый компромисс, что ActivateAfterPayment (Stage 3).
+// сообщение, тот же принятый компромисс, что confirm -> Resume (Stage 3).
 func (s *Service) attachFiles(ctx context.Context, l *slog.Logger, messageID string, fileIDs []string) {
 	if len(fileIDs) == 0 {
 		return

@@ -1,27 +1,22 @@
-import type { BundleItem, BuiltInServiceId, CustomOrderQuantities, ServiceId } from "./types";
+import type { CustomOrderQuantities, ServiceId } from "./types";
 
 // computeBundlePrice/computeItemsSubtotal/BundlePrice переехали в
 // shared/lib/tariffPricing.ts, когда Settings→Tariffs (Stage 4b) стал вторым
 // потребителем той же формулы скидки (instructions.md «Конвенции») —
-// реэкспорт, чтобы не трогать вызывающий код этой фичи (useTariffs.ts,
-// components/BundleCard.tsx, pricing.test.ts).
+// реэкспорт, чтобы не трогать вызывающий код этой фичи (components/BundleCard.tsx).
+// Публичная витрина (Stage 6) больше не пересчитывает bundle-цену сама —
+// `GET /tariffs` уже отдаёт готовые subtotal/total (openapi.yaml#Tariff) —
+// но `BundlePrice`/`computeBundlePrice` остаются нужны для live-превью
+// суммы в CustomOrderModal, где ответа сервера ещё нет.
 export { computeBundlePrice, computeItemsSubtotal } from "@/shared/lib/tariffPricing";
 export type { BundlePrice } from "@/shared/lib/tariffPricing";
 
 export function computeCustomOrderPrice(
   quantities: CustomOrderQuantities,
-  prices: Record<BuiltInServiceId, number>,
+  prices: Record<ServiceId, number>,
 ): number {
-  return (Object.keys(quantities) as BuiltInServiceId[]).reduce(
+  return (Object.keys(quantities) as ServiceId[]).reduce(
     (sum, serviceId) => sum + prices[serviceId] * quantities[serviceId],
     0,
   );
-}
-
-/** Сколько единиц данной услуги входит в пакет — нужно, чтобы понять, на сколько
- * консультаций пополнить баланс после покупки (баланс в шапке считает только `qa`). */
-export function quantityOf(items: BundleItem[], serviceId: ServiceId): number {
-  return items
-    .filter((item) => item.serviceId === serviceId)
-    .reduce((sum, item) => sum + item.qty, 0);
 }

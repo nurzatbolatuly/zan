@@ -29,12 +29,10 @@ type fakeServer struct {
 	zanv1.UnimplementedFilesServiceServer
 	zanv1.UnimplementedDocumentsServiceServer
 	zanv1.UnimplementedSttServiceServer
-	zanv1.UnimplementedRagServiceServer
 
 	extract     func(ctx context.Context, req *zanv1.ExtractRequest) (*zanv1.ExtractResponse, error)
 	transcribe  func(ctx context.Context, req *zanv1.TranscribeRequest) (*zanv1.TranscribeResponse, error)
 	render      func(ctx context.Context, req *zanv1.RenderRequest) (*zanv1.RenderResponse, error)
-	search      func(ctx context.Context, req *zanv1.SearchRequest) (*zanv1.SearchResponse, error)
 	callCount   atomic.Int32
 	lastMD      atomic.Pointer[metadata.MD]
 	internalSec string
@@ -53,11 +51,6 @@ func (f *fakeServer) Transcribe(ctx context.Context, req *zanv1.TranscribeReques
 func (f *fakeServer) Render(ctx context.Context, req *zanv1.RenderRequest) (*zanv1.RenderResponse, error) {
 	f.recordCall(ctx)
 	return f.render(ctx, req)
-}
-
-func (f *fakeServer) Search(ctx context.Context, req *zanv1.SearchRequest) (*zanv1.SearchResponse, error) {
-	f.recordCall(ctx)
-	return f.search(ctx, req)
 }
 
 func (f *fakeServer) recordCall(ctx context.Context) {
@@ -80,7 +73,6 @@ func setupClient(t *testing.T, srv *fakeServer, breaker *resilience.Breaker) *gr
 	zanv1.RegisterFilesServiceServer(grpcServer, srv)
 	zanv1.RegisterDocumentsServiceServer(grpcServer, srv)
 	zanv1.RegisterSttServiceServer(grpcServer, srv)
-	zanv1.RegisterRagServiceServer(grpcServer, srv)
 	go func() { _ = grpcServer.Serve(lis) }()
 	t.Cleanup(grpcServer.Stop)
 
@@ -160,49 +152,6 @@ func TestClient_RenderDocument_ReturnsFileURLAndObjectKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://storage.public/generated/x.pdf", result.FileURL)
 	require.Equal(t, "generated/x.pdf", result.ObjectKey)
-}
-
-func TestClient_SearchSources_ReturnsMatchesAndSendsTopK(t *testing.T) {
-	srv := &fakeServer{internalSec: "s"}
-	srv.search = func(_ context.Context, req *zanv1.SearchRequest) (*zanv1.SearchResponse, error) {
-		require.Equal(t, "какой срок исковой давности?", req.GetQueryText())
-		require.Equal(t, int32(3), req.GetTopK())
-		return &zanv1.SearchResponse{Matches: []*zanv1.SearchMatch{
-			{Ref: "ст. 178 ГК РК", Quote: "три года", Score: 0.92},
-		}}, nil
-	}
-	client := setupClient(t, srv, nil)
-
-	matches, err := client.SearchSources(context.Background(), "какой срок исковой давности?", 3)
-
-	require.NoError(t, err)
-	require.Equal(t, []grpcclient.RagMatch{{Ref: "ст. 178 ГК РК", Quote: "три года", Score: 0.92}}, matches)
-}
-
-func TestClient_SearchSources_EmptyMatchesIsNotAnError(t *testing.T) {
-	srv := &fakeServer{internalSec: "s"}
-	srv.search = func(context.Context, *zanv1.SearchRequest) (*zanv1.SearchResponse, error) {
-		return &zanv1.SearchResponse{}, nil
-	}
-	client := setupClient(t, srv, nil)
-
-	matches, err := client.SearchSources(context.Background(), "ничего похожего в корпусе", 5)
-
-	require.NoError(t, err)
-	require.Empty(t, matches)
-}
-
-func TestClient_SearchSources_PropagatesHelperUnavailable(t *testing.T) {
-	srv := &fakeServer{internalSec: "s"}
-	srv.search = func(context.Context, *zanv1.SearchRequest) (*zanv1.SearchResponse, error) {
-		return nil, status.Error(codes.Unavailable, "helper down")
-	}
-	client := setupClient(t, srv, nil)
-
-	_, err := client.SearchSources(context.Background(), "вопрос", 5)
-
-	require.Error(t, err)
-	require.True(t, grpcclient.IsUnavailable(err))
 }
 
 func TestClient_ExtractFile_RetriesOnDeadlineExceeded(t *testing.T) {

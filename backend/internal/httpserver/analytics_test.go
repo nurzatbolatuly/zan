@@ -37,10 +37,10 @@ func TestAdminAnalyticsOverview_WithToken_ReturnsFullStatusBreakdown(t *testing.
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, 0, body.TotalThreads)
-	// Все 6 статусов присутствуют явно с 0, а не только те, что встретились
+	// Все 5 статусов присутствуют явно с 0, а не только те, что встретились
 	// (newFakeAnalyticsRepo по умолчанию отдаёт пустой AnalyticsOverview).
-	require.Len(t, body.StatusBreakdown, 6)
-	for _, status := range []string{"queued", "processing", "clarify", "done", "error", "canceled"} {
+	require.Len(t, body.StatusBreakdown, 5)
+	for _, status := range []string{"awaiting_payment", "processing", "done", "error", "canceled"} {
 		require.Contains(t, body.StatusBreakdown, status)
 	}
 	// nil-указатели без данных сериализуются как отсутствие поля (omitempty).

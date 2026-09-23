@@ -16,13 +16,13 @@ import (
 	"zan-backend/internal/platform/storage"
 )
 
-// setupTestClient поднимает одноразовый MinIO в testcontainers (тот же
-// образ семейства, что и docker-compose.yml) — реальный S3 API, не мок
+// setupTestClient поднимает одноразовый MinIO в testcontainers — реальный
+// S3 API, не мок
 // AWS SDK (BACKEND_CODING_STANDARDS.md §10: поведение, не форма вызова).
 // PublicEndpoint намеренно оставлен пустым — единственный адрес контейнера
 // в тесте одинаково доступен и "изнутри", и "снаружи" (никакой отдельной
-// docker-сети между тестом и контейнером, как в docker-compose.yml, тут
-// нет), так что оба presign-метода должны отдавать рабочую ссылку.
+// приватной сети между тестом и контейнером нет), так что оба
+// presign-метода должны отдавать рабочую ссылку.
 func setupTestClient(t *testing.T) *storage.Client {
 	t.Helper()
 	ctx := context.Background()
@@ -99,9 +99,8 @@ func TestClient_Delete_RemovesObject(t *testing.T) {
 }
 
 func TestClient_New_CreatesBucketWhenMissing(t *testing.T) {
-	// Покрывает ensureBucket: New не падает на пустом MinIO без
-	// заранее созданного бакета (BACKEND_PLAN.md Stage 0 DoD — "docker
-	// compose up" без ручных шагов).
+	// Покрывает ensureBucket: New не падает на пустом хранилище без
+	// заранее созданного бакета (старт без ручных шагов).
 	client := setupTestClient(t)
 	ctx := context.Background()
 
