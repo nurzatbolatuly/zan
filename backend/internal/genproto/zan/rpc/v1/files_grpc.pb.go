@@ -19,18 +19,22 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FilesService_Extract_FullMethodName = "/zan.rpc.v1.FilesService/Extract"
+	FilesService_Extract_FullMethodName      = "/zan.rpc.v1.FilesService/Extract"
+	FilesService_ConvertToPdf_FullMethodName = "/zan.rpc.v1.FilesService/ConvertToPdf"
 )
 
 // FilesServiceClient is the client API for FilesService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-// Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-// сразу после того, как файл сохранён в S3-совместимом хранилище.
+// FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+// файлами, оба RPC синхронные. Extract — извлечение текста вложения
+// (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+// сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+// просмотра в админке (backend/internal/service/template).
 type FilesServiceClient interface {
 	Extract(ctx context.Context, in *ExtractRequest, opts ...grpc.CallOption) (*ExtractResponse, error)
+	ConvertToPdf(ctx context.Context, in *ConvertToPdfRequest, opts ...grpc.CallOption) (*ConvertToPdfResponse, error)
 }
 
 type filesServiceClient struct {
@@ -51,15 +55,28 @@ func (c *filesServiceClient) Extract(ctx context.Context, in *ExtractRequest, op
 	return out, nil
 }
 
+func (c *filesServiceClient) ConvertToPdf(ctx context.Context, in *ConvertToPdfRequest, opts ...grpc.CallOption) (*ConvertToPdfResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConvertToPdfResponse)
+	err := c.cc.Invoke(ctx, FilesService_ConvertToPdf_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FilesServiceServer is the server API for FilesService service.
 // All implementations must embed UnimplementedFilesServiceServer
 // for forward compatibility.
 //
-// FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-// Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-// сразу после того, как файл сохранён в S3-совместимом хранилище.
+// FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+// файлами, оба RPC синхронные. Extract — извлечение текста вложения
+// (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+// сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+// просмотра в админке (backend/internal/service/template).
 type FilesServiceServer interface {
 	Extract(context.Context, *ExtractRequest) (*ExtractResponse, error)
+	ConvertToPdf(context.Context, *ConvertToPdfRequest) (*ConvertToPdfResponse, error)
 	mustEmbedUnimplementedFilesServiceServer()
 }
 
@@ -72,6 +89,9 @@ type UnimplementedFilesServiceServer struct{}
 
 func (UnimplementedFilesServiceServer) Extract(context.Context, *ExtractRequest) (*ExtractResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Extract not implemented")
+}
+func (UnimplementedFilesServiceServer) ConvertToPdf(context.Context, *ConvertToPdfRequest) (*ConvertToPdfResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConvertToPdf not implemented")
 }
 func (UnimplementedFilesServiceServer) mustEmbedUnimplementedFilesServiceServer() {}
 func (UnimplementedFilesServiceServer) testEmbeddedByValue()                      {}
@@ -112,6 +132,24 @@ func _FilesService_Extract_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FilesService_ConvertToPdf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConvertToPdfRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FilesServiceServer).ConvertToPdf(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FilesService_ConvertToPdf_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FilesServiceServer).ConvertToPdf(ctx, req.(*ConvertToPdfRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FilesService_ServiceDesc is the grpc.ServiceDesc for FilesService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -122,6 +160,10 @@ var FilesService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Extract",
 			Handler:    _FilesService_Extract_Handler,
+		},
+		{
+			MethodName: "ConvertToPdf",
+			Handler:    _FilesService_ConvertToPdf_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

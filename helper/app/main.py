@@ -18,6 +18,7 @@ from starlette.routing import Route
 
 # side effect: sys.path — должен идти раньше любого импорта из zan.*
 from app import bootstrap_genproto  # noqa: F401
+from app.adapters.conversion import LibreOfficePdfConverter
 from app.adapters.extraction import PyMuPdfExtractor, PythonDocxExtractor, TesseractOcrProvider
 from app.adapters.providers import WhisperSttProvider
 from app.adapters.render import DocxTplRenderer, WeasyPrintRenderer
@@ -29,6 +30,7 @@ from app.grpc.interceptors import AuthAndLoggingInterceptor
 from app.grpc.servicers.documents import DocumentsServicer
 from app.grpc.servicers.files import FilesServicer
 from app.grpc.servicers.stt import SttServicer
+from app.services.conversion_service import ConversionService
 from app.services.extraction_service import ExtractionService
 from app.services.render_service import RenderService
 from app.services.stt_service import SttService
@@ -70,6 +72,7 @@ async def _build_grpc_server(settings: Settings) -> grpc.aio.Server:
     extraction_service = ExtractionService(
         storage, PyMuPdfExtractor(), PythonDocxExtractor(), TesseractOcrProvider()
     )
+    conversion_service = ConversionService(storage, LibreOfficePdfConverter(), storage)
     stt_service = SttService(storage, WhisperSttProvider(settings.whisper_model_size))
     render_service = RenderService(
         {RenderFormat.DOCX: DocxTplRenderer(), RenderFormat.PDF: WeasyPrintRenderer()}, storage
@@ -82,7 +85,9 @@ async def _build_grpc_server(settings: Settings) -> grpc.aio.Server:
             ("grpc.max_receive_message_length", MAX_MESSAGE_SIZE),
         ],
     )
-    files_pb2_grpc.add_FilesServiceServicer_to_server(FilesServicer(extraction_service), server)
+    files_pb2_grpc.add_FilesServiceServicer_to_server(
+        FilesServicer(extraction_service, conversion_service), server
+    )
     stt_pb2_grpc.add_SttServiceServicer_to_server(SttServicer(stt_service), server)
     documents_pb2_grpc.add_DocumentsServiceServicer_to_server(
         DocumentsServicer(render_service), server

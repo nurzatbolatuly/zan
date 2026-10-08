@@ -26,9 +26,11 @@ if _version_not_supported:
 
 
 class FilesServiceStub:
-    """FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-    Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-    сразу после того, как файл сохранён в S3-совместимом хранилище.
+    """FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+    файлами, оба RPC синхронные. Extract — извлечение текста вложения
+    (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+    сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+    просмотра в админке (backend/internal/service/template).
     """
 
     def __init__(self, channel):
@@ -42,15 +44,28 @@ class FilesServiceStub:
                 request_serializer=zan_dot_rpc_dot_v1_dot_files__pb2.ExtractRequest.SerializeToString,
                 response_deserializer=zan_dot_rpc_dot_v1_dot_files__pb2.ExtractResponse.FromString,
                 _registered_method=True)
+        self.ConvertToPdf = channel.unary_unary(
+                '/zan.rpc.v1.FilesService/ConvertToPdf',
+                request_serializer=zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfRequest.SerializeToString,
+                response_deserializer=zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfResponse.FromString,
+                _registered_method=True)
 
 
 class FilesServiceServicer:
-    """FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-    Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-    сразу после того, как файл сохранён в S3-совместимом хранилище.
+    """FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+    файлами, оба RPC синхронные. Extract — извлечение текста вложения
+    (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+    сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+    просмотра в админке (backend/internal/service/template).
     """
 
     def Extract(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ConvertToPdf(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -64,6 +79,11 @@ def add_FilesServiceServicer_to_server(servicer, server):
                     request_deserializer=zan_dot_rpc_dot_v1_dot_files__pb2.ExtractRequest.FromString,
                     response_serializer=zan_dot_rpc_dot_v1_dot_files__pb2.ExtractResponse.SerializeToString,
             ),
+            'ConvertToPdf': grpc.unary_unary_rpc_method_handler(
+                    servicer.ConvertToPdf,
+                    request_deserializer=zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfRequest.FromString,
+                    response_serializer=zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfResponse.SerializeToString,
+            ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
             'zan.rpc.v1.FilesService', rpc_method_handlers)
@@ -73,9 +93,11 @@ def add_FilesServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class FilesService:
-    """FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-    Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-    сразу после того, как файл сохранён в S3-совместимом хранилище.
+    """FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+    файлами, оба RPC синхронные. Extract — извлечение текста вложения
+    (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+    сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+    просмотра в админке (backend/internal/service/template).
     """
 
     @staticmethod
@@ -95,6 +117,33 @@ class FilesService:
             '/zan.rpc.v1.FilesService/Extract',
             zan_dot_rpc_dot_v1_dot_files__pb2.ExtractRequest.SerializeToString,
             zan_dot_rpc_dot_v1_dot_files__pb2.ExtractResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ConvertToPdf(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/zan.rpc.v1.FilesService/ConvertToPdf',
+            zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfRequest.SerializeToString,
+            zan_dot_rpc_dot_v1_dot_files__pb2.ConvertToPdfResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16zan/rpc/v1/files.proto\x12\nzan.rpc.v1\"5\n\x0e\x45xtractRequest\x12\x10\n\x08\x66ile_url\x18\x01 \x01(\t\x12\x11\n\tmime_type\x18\x02 \x01(\t\"\x1f\n\x0f\x45xtractResponse\x12\x0c\n\x04text\x18\x01 \x01(\t2R\n\x0c\x46ilesService\x12\x42\n\x07\x45xtract\x12\x1a.zan.rpc.v1.ExtractRequest\x1a\x1b.zan.rpc.v1.ExtractResponseB0Z.zan-backend/internal/genproto/zan/rpc/v1;zanv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x16zan/rpc/v1/files.proto\x12\nzan.rpc.v1\"5\n\x0e\x45xtractRequest\x12\x10\n\x08\x66ile_url\x18\x01 \x01(\t\x12\x11\n\tmime_type\x18\x02 \x01(\t\"\x1f\n\x0f\x45xtractResponse\x12\x0c\n\x04text\x18\x01 \x01(\t\":\n\x13\x43onvertToPdfRequest\x12\x10\n\x08\x66ile_url\x18\x01 \x01(\t\x12\x11\n\tmime_type\x18\x02 \x01(\t\"*\n\x14\x43onvertToPdfResponse\x12\x12\n\nobject_key\x18\x01 \x01(\t2\xa5\x01\n\x0c\x46ilesService\x12\x42\n\x07\x45xtract\x12\x1a.zan.rpc.v1.ExtractRequest\x1a\x1b.zan.rpc.v1.ExtractResponse\x12Q\n\x0c\x43onvertToPdf\x12\x1f.zan.rpc.v1.ConvertToPdfRequest\x1a .zan.rpc.v1.ConvertToPdfResponseB0Z.zan-backend/internal/genproto/zan/rpc/v1;zanv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,6 +36,10 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_EXTRACTREQUEST']._serialized_end=91
   _globals['_EXTRACTRESPONSE']._serialized_start=93
   _globals['_EXTRACTRESPONSE']._serialized_end=124
-  _globals['_FILESSERVICE']._serialized_start=126
-  _globals['_FILESSERVICE']._serialized_end=208
+  _globals['_CONVERTTOPDFREQUEST']._serialized_start=126
+  _globals['_CONVERTTOPDFREQUEST']._serialized_end=184
+  _globals['_CONVERTTOPDFRESPONSE']._serialized_start=186
+  _globals['_CONVERTTOPDFRESPONSE']._serialized_end=228
+  _globals['_FILESSERVICE']._serialized_start=231
+  _globals['_FILESSERVICE']._serialized_end=396
 # @@protoc_insertion_point(module_scope)

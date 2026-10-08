@@ -199,6 +199,44 @@ CREATE TABLE core.agent_prompts (
 );
 
 -- -----------------------------------------------------------------------------
+-- core.document_types — 000011_document_templates: справочник типов документов
+-- для шаблонов (договор, приказ, исковое заявление…), редактируется в админке
+-- (/admin/document-types), не enum. Имя уникально без учёта регистра.
+-- Сид — 7 стартовых типов с фиксированными id (см. миграцию).
+-- -----------------------------------------------------------------------------
+CREATE TABLE core.document_types (
+    id         uuid PRIMARY KEY,
+    name       text NOT NULL CHECK (btrim(name) <> ''),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX document_types_name_key ON core.document_types (lower(name));
+
+-- -----------------------------------------------------------------------------
+-- core.document_templates — 000011_document_templates: образец документа
+-- (PDF/DOCX), загруженный админом (/admin/document-templates). object_key —
+-- исходный файл, preview_object_key — PDF для просмотра (= object_key у PDF,
+-- копия от helper/ FilesService.ConvertToPdf у DOCX). FK без CASCADE — тип с
+-- шаблонами не удаляется.
+-- -----------------------------------------------------------------------------
+CREATE TABLE core.document_templates (
+    id                 uuid PRIMARY KEY,
+    document_type_id   uuid NOT NULL REFERENCES core.document_types (id),
+    title              text NOT NULL CHECK (btrim(title) <> ''),
+    object_key         text NOT NULL,
+    original_name      text NOT NULL,
+    mime_type          text NOT NULL,
+    size_bytes         bigint NOT NULL,
+    preview_object_key text NOT NULL,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX document_templates_document_type_id_idx
+    ON core.document_templates (document_type_id);
+
+-- -----------------------------------------------------------------------------
 -- Стартовые данные — Stage 2 (000003_stage2_billing): единственный способ
 -- завести core.services, т.к. /admin/services не даёт POST (zan-backend-tz-v2.md
 -- §3.7 — только GET список + PUT price/is_active). Цены 1:1 с демо-данными

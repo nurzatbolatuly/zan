@@ -1,8 +1,8 @@
 import pytest
 
 from app.domain.errors import ExtractionError
-from app.domain.files import ExtractedDocument
-from app.services.extraction_service import MIME_DOCX, MIME_JPEG, MIME_PDF, ExtractionService
+from app.domain.files import MIME_DOCX, MIME_JPEG, MIME_PDF, ExtractedDocument
+from app.services.extraction_service import ExtractionService
 
 
 class FakeDownloader:

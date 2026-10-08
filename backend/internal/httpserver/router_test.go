@@ -29,6 +29,7 @@ import (
 	"zan-backend/internal/service/document"
 	"zan-backend/internal/service/prompt"
 	"zan-backend/internal/service/session"
+	"zan-backend/internal/service/template"
 	"zan-backend/internal/service/thread"
 	"zan-backend/internal/wshub"
 )
@@ -72,7 +73,13 @@ func (r *fakeSessionRepo) Update(_ context.Context, s domain.Session) error {
 	return nil
 }
 
-const testAdminToken = "test-admin-token"
+const (
+	testAdminToken = "test-admin-token"
+	// testFileMaxSizeBytes — лимит загрузок в тестах (вложения, голос, шаблоны).
+	testFileMaxSizeBytes = 1 << 20
+	// seededDocumentTypeID — тип документа, заранее заведённый в fakeTemplateRepo.
+	seededDocumentTypeID = "00000000-0000-0000-0001-000000000001"
+)
 
 // noopFileAttacher — thread.FileAttacher для тестов, не касающихся file_ids
 // (Stage 4) — ни один из них не передаёт file_ids, поэтому оба метода
@@ -110,6 +117,7 @@ func newTestDeps() httpserver.Deps {
 	// cmd/api/main.go с repo.ThreadRepo), чтобы тред, созданный через
 	// createThreadHandler в тесте, был виден generate-document/GET document.
 	documentSvc := document.New(threadRepo, newFakeDocumentFileStore(), bill, cat, newFakeDocumentGenerator(), &fakeDocumentRenderer{}, fakeDocumentStorage{}, clock.Real{}, idgen.UUIDGenerator{})
+	templateSvc := template.New(newFakeTemplateRepo(), fakeTemplateStorage{}, fakeTemplateConverter{}, clock.Real{}, idgen.UUIDGenerator{}, testFileMaxSizeBytes)
 	analyticsSvc := analytics.New(newFakeAnalyticsRepo())
 	clientLogSvc := clientlog.New()
 	return httpserver.Deps{
@@ -120,7 +128,9 @@ func newTestDeps() httpserver.Deps {
 		Hub:                 hub,
 		Documents:           documentSvc,
 		Prompts:             prompts,
+		Templates:           templateSvc,
 		Analytics:           analyticsSvc,
+		FileMaxSizeBytes:    testFileMaxSizeBytes,
 		ClientLogs:          clientLogSvc,
 		AdminToken:          testAdminToken,
 		SessionCookieSecure: false,

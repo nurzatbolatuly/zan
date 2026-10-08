@@ -18,6 +18,7 @@ import (
 	"zan-backend/internal/service/file"
 	"zan-backend/internal/service/prompt"
 	"zan-backend/internal/service/session"
+	"zan-backend/internal/service/template"
 	"zan-backend/internal/service/thread"
 	"zan-backend/internal/service/voice"
 	"zan-backend/internal/wshub"
@@ -41,6 +42,7 @@ type Deps struct {
 	Files               *file.Service
 	Voice               *voice.Service
 	Prompts             *prompt.Service
+	Templates           *template.Service
 	Analytics           *analytics.Service
 	ClientLogs          *clientlog.Service
 	FileMaxSizeBytes    int64
@@ -147,6 +149,15 @@ func NewRouter(baseLogger *slog.Logger, deps Deps) *gin.Engine {
 	// два роута — единственный способ поменять текст без деплоя кода.
 	admin.GET("/prompts", adminListPromptsHandler(deps.Prompts))
 	admin.PUT("/prompts/:agent_type", adminUpdatePromptHandler(deps.Prompts))
+	// Шаблоны документов и справочник их типов (instructions.md §1 «Настройки»).
+	admin.GET("/document-types", adminListDocumentTypesHandler(deps.Templates))
+	admin.POST("/document-types", adminCreateDocumentTypeHandler(deps.Templates))
+	admin.PUT("/document-types/:id", adminRenameDocumentTypeHandler(deps.Templates))
+	admin.DELETE("/document-types/:id", adminDeleteDocumentTypeHandler(deps.Templates))
+	admin.GET("/document-templates", adminListDocumentTemplatesHandler(deps.Templates))
+	admin.POST("/document-templates", adminCreateDocumentTemplateHandler(deps.Templates, deps.FileMaxSizeBytes))
+	admin.PUT("/document-templates/:id", adminUpdateDocumentTemplateHandler(deps.Templates, deps.FileMaxSizeBytes))
+	admin.DELETE("/document-templates/:id", adminDeleteDocumentTemplateHandler(deps.Templates))
 	// Аналитика (zan-backend-tz-v2.md §3.8, Stage 7).
 	admin.GET("/analytics/overview", adminAnalyticsOverviewHandler(deps.Analytics))
 

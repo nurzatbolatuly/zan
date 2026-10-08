@@ -16,6 +16,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 #                          понятного сообщения, если их нет)
 #   fonts-dejavu-core     — шрифт, на который явно ссылается CSS в
 #                          app/adapters/render.py (_PDF_TEMPLATE)
+#   libreoffice-writer-nogui — DOCX -> PDF для просмотра шаблонов документов
+#                          (FilesService.ConvertToPdf, app/adapters/conversion.py);
+#                          -nogui — без X11/GTK, заметно легче полного пакета
+#   fonts-liberation      — метрически совместимые замены Times New Roman/Arial/
+#                          Courier New: без них LibreOffice подставляет другой
+#                          шрифт, и PDF шаблона расходится с вёрсткой DOCX
 RUN apt-get update && apt-get install --no-install-recommends -y \
         tesseract-ocr \
         tesseract-ocr-rus \
@@ -25,6 +31,8 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
         libpangocairo-1.0-0 \
         libgdk-pixbuf-2.0-0 \
         fonts-dejavu-core \
+        libreoffice-writer-nogui \
+        fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # Слой зависимостей отдельно от кода — requirements.txt меняется реже, чем

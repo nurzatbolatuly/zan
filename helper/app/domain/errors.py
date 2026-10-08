@@ -26,3 +26,8 @@ class SttError(Exception):
 
 class RenderError(Exception):
     """DocumentsService.Render не смог собрать файл из шаблона."""
+
+
+class ConversionError(Exception):
+    """FilesService.ConvertToPdf не смог получить PDF из файла (повреждён,
+    неподдерживаемый MIME, конвертер не уложился в таймаут)."""

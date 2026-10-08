@@ -3,6 +3,7 @@ package httpserver_test
 import (
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"zan-backend/internal/service/catalog"
 	"zan-backend/internal/service/document"
 	"zan-backend/internal/service/prompt"
+	"zan-backend/internal/service/template"
 	"zan-backend/internal/service/thread"
 )
 
@@ -502,3 +504,144 @@ func (r *fakeAnalyticsRepo) GetOverview(context.Context) (domain.AnalyticsOvervi
 }
 
 var _ analytics.Repository = (*fakeAnalyticsRepo)(nil)
+
+// fakeTemplateRepo — in-memory template.Repository с той же семантикой
+// ограничений, что у core.document_* (уникальное имя типа без учёта
+// регистра, FK шаблон -> тип).
+type fakeTemplateRepo struct {
+	mu        sync.Mutex
+	types     map[string]domain.DocumentType
+	templates map[string]domain.DocumentTemplate
+}
+
+func newFakeTemplateRepo() *fakeTemplateRepo {
+	return &fakeTemplateRepo{
+		types:     map[string]domain.DocumentType{seededDocumentTypeID: {ID: seededDocumentTypeID, Name: "Договор"}},
+		templates: make(map[string]domain.DocumentTemplate),
+	}
+}
+
+func (r *fakeTemplateRepo) ListTypes(context.Context) ([]domain.DocumentType, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.DocumentType, 0, len(r.types))
+	for _, t := range r.types {
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+func (r *fakeTemplateRepo) GetType(_ context.Context, id string) (domain.DocumentType, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.types[id]
+	if !ok {
+		return domain.DocumentType{}, template.ErrTypeNotFound
+	}
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) CreateType(_ context.Context, t domain.DocumentType) (domain.DocumentType, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.types {
+		if strings.EqualFold(existing.Name, t.Name) {
+			return domain.DocumentType{}, template.ErrTypeNameTaken
+		}
+	}
+	r.types[t.ID] = t
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) RenameType(_ context.Context, id, name string, updatedAt time.Time) (domain.DocumentType, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.types[id]
+	if !ok {
+		return domain.DocumentType{}, template.ErrTypeNotFound
+	}
+	t.Name, t.UpdatedAt = name, updatedAt
+	r.types[id] = t
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) DeleteType(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.types[id]; !ok {
+		return template.ErrTypeNotFound
+	}
+	for _, tpl := range r.templates {
+		if tpl.DocumentTypeID == id {
+			return template.ErrTypeInUse
+		}
+	}
+	delete(r.types, id)
+	return nil
+}
+
+func (r *fakeTemplateRepo) ListTemplates(context.Context) ([]domain.DocumentTemplate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.DocumentTemplate, 0, len(r.templates))
+	for _, t := range r.templates {
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+func (r *fakeTemplateRepo) GetTemplate(_ context.Context, id string) (domain.DocumentTemplate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.templates[id]
+	if !ok {
+		return domain.DocumentTemplate{}, template.ErrNotFound
+	}
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) CreateTemplate(_ context.Context, t domain.DocumentTemplate) (domain.DocumentTemplate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.templates[t.ID] = t
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) UpdateTemplate(_ context.Context, t domain.DocumentTemplate) (domain.DocumentTemplate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.templates[t.ID]; !ok {
+		return domain.DocumentTemplate{}, template.ErrNotFound
+	}
+	r.templates[t.ID] = t
+	return t, nil
+}
+
+func (r *fakeTemplateRepo) DeleteTemplate(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.templates, id)
+	return nil
+}
+
+// fakeTemplateStorage — template.Storage без реального S3; ссылки
+// детерминированы по ключу.
+type fakeTemplateStorage struct{}
+
+func (fakeTemplateStorage) Put(context.Context, string, io.Reader, int64, string) error { return nil }
+func (fakeTemplateStorage) Delete(context.Context, string) error                        { return nil }
+
+func (fakeTemplateStorage) PresignGetPublic(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://storage.public/" + key, nil
+}
+
+func (fakeTemplateStorage) PresignGetInternal(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://storage.internal/" + key, nil
+}
+
+// fakeTemplateConverter — template.Converter вместо helper/.
+type fakeTemplateConverter struct{}
+
+func (fakeTemplateConverter) ConvertToPDF(context.Context, string, string) (string, error) {
+	return "converted/preview.pdf", nil
+}

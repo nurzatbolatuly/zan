@@ -68,6 +68,23 @@ func (c *Client) ExtractFile(ctx context.Context, fileURL, mimeType string) (str
 	return resp.GetText(), nil
 }
 
+// ConvertToPDF — FilesService.ConvertToPdf: PDF-копия DOCX-шаблона документа
+// для просмотра (internal/service/template). fileURL — та же presigned-ссылка
+// на собственный storage, что у ExtractFile. Возвращает ключ готового PDF в
+// бакете — владельцем объекта дальше становится вызывающий сервис.
+func (c *Client) ConvertToPDF(ctx context.Context, fileURL, mimeType string) (string, error) {
+	var resp *zanv1.ConvertToPdfResponse
+	err := c.call(ctx, "FilesService/ConvertToPdf", func(ctx context.Context) error {
+		var err error
+		resp, err = c.files.ConvertToPdf(ctx, &zanv1.ConvertToPdfRequest{FileUrl: fileURL, MimeType: mimeType})
+		return err
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetObjectKey(), nil
+}
+
 // TranscribeAudio — SttService.Transcribe (BACKEND_PLAN.md Stage 4).
 func (c *Client) TranscribeAudio(ctx context.Context, fileURL, mimeType string, lang domain.Language) (string, error) {
 	var resp *zanv1.TranscribeResponse

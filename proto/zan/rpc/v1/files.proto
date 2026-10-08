@@ -4,11 +4,14 @@ package zan.rpc.v1;
 
 option go_package = "zan-backend/internal/genproto/zan/rpc/v1;zanv1";
 
-// FilesService — извлечение текста из вложенных файлов (BACKEND_PLAN.md §3,
-// Stage 4). Один RPC, синхронный — вызывается из backend/internal/service/file
-// сразу после того, как файл сохранён в S3-совместимом хранилище.
+// FilesService — операции над уже сохранёнными в S3-совместимом хранилище
+// файлами, оба RPC синхронные. Extract — извлечение текста вложения
+// (BACKEND_PLAN.md §3, Stage 4; backend/internal/service/file сразу после
+// сохранения файла). ConvertToPdf — PDF-копия DOCX-шаблона документа для
+// просмотра в админке (backend/internal/service/template).
 service FilesService {
   rpc Extract(ExtractRequest) returns (ExtractResponse);
+  rpc ConvertToPdf(ConvertToPdfRequest) returns (ConvertToPdfResponse);
 }
 
 // ExtractRequest — file_url, не байты (BACKEND_PLAN.md §3.1: payload
@@ -25,4 +28,19 @@ message ExtractRequest {
 
 message ExtractResponse {
   string text = 1;
+}
+
+// ConvertToPdfRequest — те же правила для file_url, что у ExtractRequest
+// (presigned-ссылка на собственный storage, SSRF-проверка на стороне Python).
+// mime_type — сейчас поддерживается только DOCX; остальное — INVALID_ARGUMENT.
+message ConvertToPdfRequest {
+  string file_url = 1;
+  string mime_type = 2;
+}
+
+// ConvertToPdfResponse — ключ готового PDF в том же бакете (не ссылка и не
+// байты, тот же принцип, что RenderResponse.object_key): владелец объекта
+// дальше — backend/, он же перевыпускает ссылки и удаляет объект.
+message ConvertToPdfResponse {
+  string object_key = 1;
 }

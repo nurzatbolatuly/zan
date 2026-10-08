@@ -71,8 +71,9 @@ async def test_download_wraps_http_errors() -> None:
 
 @pytest.fixture(scope="module")
 def minio_endpoint() -> Iterator[str]:
-    """Реальный MinIO в testcontainers — не мок S3 API: moto не поддерживает кастомный endpoint_url, который
-    нужен для MinIO (проверено при реализации Stage 4), см. pyproject.toml.
+    """Реальный MinIO в testcontainers — не мок S3 API: moto не поддерживает
+    кастомный endpoint_url, который нужен для MinIO (проверено при реализации
+    Stage 4), см. pyproject.toml.
     """
     container = (
         DockerContainer("quay.io/minio/minio:latest")

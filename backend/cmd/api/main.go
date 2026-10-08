@@ -36,6 +36,7 @@ import (
 	"zan-backend/internal/service/file"
 	"zan-backend/internal/service/prompt"
 	"zan-backend/internal/service/session"
+	"zan-backend/internal/service/template"
 	"zan-backend/internal/service/thread"
 	"zan-backend/internal/service/voice"
 	"zan-backend/internal/wshub"
@@ -186,6 +187,17 @@ func run() error {
 	)
 	voiceSvc := voice.New(s3Client, helperClient, clock.Real{}, idgen.UUIDGenerator{}, cfg.VoiceMaxSizeBytes)
 	promptSvc := prompt.New(repo.NewPromptRepo(pool), clock.Real{})
+	// templateSvc — шаблоны документов (/admin/document-*): helperClient
+	// удовлетворяет template.Converter (FilesService.ConvertToPdf), s3Client —
+	// template.Storage структурно. Лимит файла — общий с вложениями чата.
+	templateSvc := template.New(
+		repo.NewTemplateRepo(pool),
+		s3Client,
+		helperClient,
+		clock.Real{},
+		idgen.UUIDGenerator{},
+		cfg.FileMaxSizeBytes,
+	)
 	// agentClient — прямой вызов OpenAI (промпт из БД + история треда),
 	// реализует thread.Agent и document.Generator; promptSvc удовлетворяет
 	// agent.PromptProvider, s3Client — agent.FileLoader (PDF/изображения
@@ -245,6 +257,7 @@ func run() error {
 		Files:             fileSvc,
 		Voice:             voiceSvc,
 		Prompts:           promptSvc,
+		Templates:         templateSvc,
 		Analytics:         analyticsSvc,
 		ClientLogs:        clientLogSvc,
 		FileMaxSizeBytes:  cfg.FileMaxSizeBytes,

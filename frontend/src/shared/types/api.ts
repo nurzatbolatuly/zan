@@ -90,6 +90,33 @@ export interface AgentPromptDto {
   updated_at: string;
 }
 
+export interface DocumentTypeDto {
+  id: string;
+  name: string;
+  updated_at: string;
+}
+
+export interface DocumentTypeWriteRequestDto {
+  name: string;
+}
+
+export type DocumentTemplateMimeType =
+  | "application/pdf"
+  | "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/** `preview_url` — presigned-ссылка на PDF-версию, перевыпускается на каждый ответ. */
+export interface DocumentTemplateDto {
+  id: string;
+  document_type_id: string;
+  title: string;
+  original_name: string;
+  mime_type: DocumentTemplateMimeType;
+  size_bytes: number;
+  preview_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type MessageSender = "user" | "assistant";
 export type MessageInputType = "text" | "voice" | "file";
 export type MessageFeedbackValue = "like" | "dislike";

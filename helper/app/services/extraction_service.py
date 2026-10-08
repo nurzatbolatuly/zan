@@ -7,12 +7,7 @@ import asyncio
 from typing import Protocol
 
 from app.domain.errors import ExtractionError
-from app.domain.files import ExtractedDocument
-
-MIME_PDF = "application/pdf"
-MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-MIME_PNG = "image/png"
-MIME_JPEG = "image/jpeg"
+from app.domain.files import MIME_DOCX, MIME_JPEG, MIME_PDF, MIME_PNG, ExtractedDocument
 
 # SUPPORTED_MIME_TYPES — зеркалит file.extractableMimeTypes на стороне Go
 # (backend/internal/service/file/file.go) — загрузить можно файл любого типа,

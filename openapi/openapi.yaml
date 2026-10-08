@@ -487,6 +487,252 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiError" }
 
+  /admin/document-types:
+    get:
+      summary: Справочник типов документов
+      description: >
+        Типы, к которым относятся шаблоны документов (договор, приказ,
+        исковое заявление…), по алфавиту. Справочник редактируется здесь же,
+        не enum — новый тип не требует деплоя. Миграция 000011 заводит 7
+        стартовых типов.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DocumentType" }
+    post:
+      summary: Создать тип документа
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentTypeWriteRequest" }
+      responses:
+        "201":
+          description: Создан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentType" }
+        "400":
+          description: invalid_request — пустое или длиннее 100 символов имя
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: document_type_name_taken — тип с таким именем (без учёта регистра) уже есть
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/document-types/{id}:
+    put:
+      summary: Переименовать тип документа
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DocumentTypeWriteRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentType" }
+        "400":
+          description: invalid_request — пустое или длиннее 100 символов имя
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: document_type_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: document_type_name_taken
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    delete:
+      summary: Удалить тип документа
+      description: Физическое удаление. Тип, к которому относится хотя бы один шаблон, удалить нельзя.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Удалён
+        "404":
+          description: document_type_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "409":
+          description: document_type_in_use — у типа есть шаблоны
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/document-templates:
+    get:
+      summary: Все шаблоны документов, новые сверху
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DocumentTemplate" }
+    post:
+      summary: Загрузить шаблон документа
+      description: >
+        multipart/form-data. Только PDF или DOCX (по расширению имени файла,
+        подтверждённому сигнатурой содержимого; Content-Type части не
+        учитывается), лимит — FILE_MAX_SIZE_BYTES (15 МБ). Для DOCX
+        синхронно строится PDF-копия для просмотра (helper/,
+        FilesService.ConvertToPdf) — не удалась, шаблон не сохраняется.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, document_type_id, title]
+              properties:
+                file: { type: string, format: binary }
+                document_type_id: { type: string, format: uuid }
+                title: { type: string, maxLength: 200 }
+      responses:
+        "201":
+          description: Создан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentTemplate" }
+        "400":
+          description: invalid_request — нет файла, пустое/длинное название
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: document_type_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "413":
+          description: file_too_large
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "415":
+          description: unsupported_file_type — не PDF и не DOCX
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "502":
+          description: template_conversion_failed — PDF-копию DOCX построить не удалось (файл повреждён или helper/ недоступен)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
+  /admin/document-templates/{id}:
+    put:
+      summary: Изменить шаблон документа
+      description: >
+        multipart/form-data, полная замена типа и названия. file —
+        необязателен: без него файл остаётся прежним, с ним — заменяется
+        (старые объекты удаляются из хранилища после успешного сохранения).
+        Ограничения файла — как у POST.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [document_type_id, title]
+              properties:
+                file: { type: string, format: binary }
+                document_type_id: { type: string, format: uuid }
+                title: { type: string, maxLength: 200 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DocumentTemplate" }
+        "400":
+          description: invalid_request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "404":
+          description: document_template_not_found, document_type_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "413":
+          description: file_too_large
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "415":
+          description: unsupported_file_type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "502":
+          description: template_conversion_failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+    delete:
+      summary: Удалить шаблон документа
+      description: Физическое удаление записи и файлов шаблона из хранилища.
+      tags: [admin]
+      security: [{ AdminToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Удалён
+        "404":
+          description: document_template_not_found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+
   /admin/analytics/overview:
     get:
       summary: Агрегаты по тредам/сообщениям
@@ -1169,9 +1415,11 @@ components:
           - 400: invalid_request
           - 401: session_invalid, admin_unauthorized
           - 404: agent_type_not_found, document_not_generated,
+            document_template_not_found, document_type_not_found,
             file_not_found, payment_not_found, service_not_found,
             tariff_not_found, thread_not_found
-          - 409: payment_not_pending, payment_required, thread_busy,
+          - 409: document_type_in_use, document_type_name_taken,
+            payment_not_pending, payment_required, thread_busy,
             thread_cannot_cancel, thread_not_active
           - 413: file_too_large
           - 415: unsupported_file_type
@@ -1179,7 +1427,8 @@ components:
           - 429: admin_blocked (IP заблокирован после N неудач, Stage 7),
             rate_limited
           - 500: internal_error
-          - 502: document_generation_failed (helper/ недоступен/вернул отказ)
+          - 502: document_generation_failed (helper/ недоступен/вернул отказ),
+            template_conversion_failed (PDF-копию DOCX-шаблона построить не удалось)
           - 503: voice_transcribe_failed
       enum:
         - admin_blocked
@@ -1187,6 +1436,10 @@ components:
         - agent_type_not_found
         - document_generation_failed
         - document_not_generated
+        - document_template_not_found
+        - document_type_in_use
+        - document_type_name_taken
+        - document_type_not_found
         - empty_transcript
         - file_not_found
         - file_rejected
@@ -1200,6 +1453,7 @@ components:
         - service_not_found
         - session_invalid
         - tariff_not_found
+        - template_conversion_failed
         - thread_busy
         - thread_cannot_cancel
         - thread_not_active
@@ -1602,6 +1856,46 @@ components:
         mime_type: { type: string, example: application/pdf }
         size_bytes: { type: integer }
         processing_status: { $ref: "#/components/schemas/FileProcessingStatus" }
+
+    DocumentType:
+      type: object
+      description: Тип документа из справочника (/admin/document-types).
+      required: [id, name, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 100, example: Договор }
+        updated_at: { type: string, format: date-time }
+
+    DocumentTypeWriteRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 100, description: "Пробелы по краям обрезаются." }
+
+    DocumentTemplate:
+      type: object
+      description: Шаблон документа (/admin/document-templates).
+      required: [id, document_type_id, title, original_name, mime_type, size_bytes, preview_url, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        document_type_id: { type: string, format: uuid }
+        title: { type: string, maxLength: 200 }
+        original_name: { type: string, example: lease.docx }
+        mime_type:
+          type: string
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+        size_bytes: { type: integer, description: "Размер исходного файла." }
+        preview_url:
+          type: string
+          format: uri
+          description: >
+            Presigned-ссылка на PDF-версию для просмотра (для PDF — сам файл,
+            для DOCX — копия от helper/). Перевыпускается на каждый ответ, не
+            хранить статично.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     AnalyticsOverview:
       type: object

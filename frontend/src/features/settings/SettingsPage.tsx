@@ -8,12 +8,13 @@ import { settingsDictionary } from "./locales";
 import { AdminGate } from "./components/AdminGate";
 import { PromptsTab } from "./components/PromptsTab";
 import { TariffsTab } from "./components/TariffsTab";
+import { TemplatesTab } from "./components/TemplatesTab";
 import { AnalyticsTab } from "./components/AnalyticsTab";
 import type { SettingsTabKey } from "./types";
 
 /**
  * Stage 4 (PLAN.md §5) — заменяет плейсхолдер Stage 0 целиком
- * (FRONT_CODING_STANDARDS.md §3). 3 независимые вкладки — общая только
+ * (FRONT_CODING_STANDARDS.md §3). 4 независимые вкладки — общая только
  * `useRole()`-гейт (Stage 0) и переключатель вкладок, вся логика каждой
  * вкладки живёт в своём компоненте/хуке.
  */
@@ -58,6 +59,7 @@ export function SettingsPage() {
             items={[
               { key: "prompts", label: t.tabPrompts },
               { key: "tariffs", label: t.tabTariffs },
+              { key: "templates", label: t.tabTemplates },
               { key: "analytics", label: t.tabAnalytics },
             ]}
           />
@@ -65,6 +67,7 @@ export function SettingsPage() {
           <div className="min-w-0 flex-1">
             {tab === "prompts" && <PromptsTab />}
             {tab === "tariffs" && <TariffsTab />}
+            {tab === "templates" && <TemplatesTab />}
             {tab === "analytics" && <AnalyticsTab />}
           </div>
         </div>

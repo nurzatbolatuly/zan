@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -23,37 +22,22 @@ type transcribeResponse struct {
 // получает текст до отправки сообщения в тред, ничего не сохраняется в БД.
 func transcribeVoiceHandler(svc *voice.Service, maxSizeBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSizeBytes+1)
-
-		fh, err := c.FormFile("audio")
-		if err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				writeError(c, fileTooLargeError(maxSizeBytes))
-				return
-			}
+		upload, apiErr := readUploadedFile(c, "audio", maxSizeBytes)
+		if apiErr != nil {
+			writeError(c, apiErr)
+			return
+		}
+		if upload == nil {
 			writeError(c, invalidRequestError("Missing multipart field \"audio\""))
-			return
-		}
-
-		opened, err := fh.Open()
-		if err != nil {
-			writeError(c, apierror.Internal())
-			return
-		}
-		data, err := io.ReadAll(opened)
-		_ = opened.Close()
-		if err != nil {
-			writeError(c, apierror.Internal())
 			return
 		}
 
 		sess := sessionFromGin(c)
 		text, err := svc.Transcribe(c.Request.Context(), voice.TranscribeRequest{
 			SessionID: sess.ID,
-			MimeType:  fh.Header.Get("Content-Type"),
+			MimeType:  upload.ContentType,
 			Lang:      sess.Language,
-			Data:      data,
+			Data:      upload.Data,
 		})
 		if err != nil {
 			writeVoiceError(c, err, maxSizeBytes)

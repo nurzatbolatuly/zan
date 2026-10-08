@@ -31,6 +31,7 @@ type fakeServer struct {
 	zanv1.UnimplementedSttServiceServer
 
 	extract     func(ctx context.Context, req *zanv1.ExtractRequest) (*zanv1.ExtractResponse, error)
+	convert     func(ctx context.Context, req *zanv1.ConvertToPdfRequest) (*zanv1.ConvertToPdfResponse, error)
 	transcribe  func(ctx context.Context, req *zanv1.TranscribeRequest) (*zanv1.TranscribeResponse, error)
 	render      func(ctx context.Context, req *zanv1.RenderRequest) (*zanv1.RenderResponse, error)
 	callCount   atomic.Int32
@@ -41,6 +42,11 @@ type fakeServer struct {
 func (f *fakeServer) Extract(ctx context.Context, req *zanv1.ExtractRequest) (*zanv1.ExtractResponse, error) {
 	f.recordCall(ctx)
 	return f.extract(ctx, req)
+}
+
+func (f *fakeServer) ConvertToPdf(ctx context.Context, req *zanv1.ConvertToPdfRequest) (*zanv1.ConvertToPdfResponse, error) {
+	f.recordCall(ctx)
+	return f.convert(ctx, req)
 }
 
 func (f *fakeServer) Transcribe(ctx context.Context, req *zanv1.TranscribeRequest) (*zanv1.TranscribeResponse, error) {
@@ -152,6 +158,21 @@ func TestClient_RenderDocument_ReturnsFileURLAndObjectKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://storage.public/generated/x.pdf", result.FileURL)
 	require.Equal(t, "generated/x.pdf", result.ObjectKey)
+}
+
+func TestClient_ConvertToPDF_ReturnsObjectKey(t *testing.T) {
+	srv := &fakeServer{internalSec: "s"}
+	srv.convert = func(_ context.Context, req *zanv1.ConvertToPdfRequest) (*zanv1.ConvertToPdfResponse, error) {
+		require.Equal(t, "https://storage.internal/templates/x", req.GetFileUrl())
+		require.Equal(t, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", req.GetMimeType())
+		return &zanv1.ConvertToPdfResponse{ObjectKey: "converted/x.pdf"}, nil
+	}
+	client := setupClient(t, srv, nil)
+
+	key, err := client.ConvertToPDF(context.Background(), "https://storage.internal/templates/x",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+	require.NoError(t, err)
+	require.Equal(t, "converted/x.pdf", key)
 }
 
 func TestClient_ExtractFile_RetriesOnDeadlineExceeded(t *testing.T) {

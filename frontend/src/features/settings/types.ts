@@ -3,7 +3,7 @@ import type { BundleItem, ServiceId } from "@/shared/types/tariff";
 
 export type { ServiceId, BundleItem };
 
-export type SettingsTabKey = "prompts" | "tariffs" | "analytics";
+export type SettingsTabKey = "prompts" | "tariffs" | "templates" | "analytics";
 
 /**
  * Ровно два системных агента (openapi.yaml#AgentType) — фиксировано
@@ -58,4 +58,37 @@ export interface AnalyticsSummary {
   avgResponseTimeLabel: string | null;
   satisfactionRateLabel: string | null;
   byStatus: AnalyticsStatusRow[];
+}
+
+/** Тип документа из справочника (`/admin/document-types`). */
+export interface DocumentType {
+  id: string;
+  name: string;
+}
+
+export type TemplateFileKind = "pdf" | "docx";
+
+/** Шаблон документа (`/admin/document-templates`). */
+export interface DocumentTemplate {
+  id: string;
+  typeId: string;
+  title: string;
+  originalName: string;
+  fileKind: TemplateFileKind;
+  sizeBytes: number;
+  /** PDF-версия для просмотра (у DOCX — копия, построенная бэком). */
+  previewUrl: string;
+  updatedAt: string;
+}
+
+/** Результат формы `TemplateEditModal`; `file: null` при изменении — файл не меняется. */
+export interface TemplateFormResult {
+  typeId: string;
+  title: string;
+  file: File | null;
+}
+
+export interface TemplateGroup {
+  type: DocumentType;
+  templates: DocumentTemplate[];
 }

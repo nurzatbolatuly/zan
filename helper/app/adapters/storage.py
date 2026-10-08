@@ -34,7 +34,7 @@ class HttpxGetter:
 class S3Storage:
     """Скачивание входных файлов (file_url, который прислал backend/, всегда
     указывает на этот же storage — см. _ensure_own_url, SSRF-защита
-    BACKEND_PLAN.md §8) и загрузка сгенерированных (generated/-префикс, §3.1).
+    BACKEND_PLAN.md §8) и загрузка созданных helper/ файлов (рендер, конвертация — §3.1).
 
     Два S3-клиента с одними и теми же учётными данными, но разными
     endpoint_url — internal (реальные S3-операции, тот же docker-сеть, что и
@@ -108,7 +108,8 @@ class S3Storage:
             raise UntrustedFileURLError(f"refusing to fetch file_url with untrusted host {host!r}")
 
     async def upload_generated(self, key: str, data: bytes, content_type: str) -> tuple[str, str]:
-        """Загружает готовый файл под generated/-префиксом, возвращает
+        """Загружает созданный helper/ файл (рендер — generated/, конвертация —
+        converted/; префикс задаёт вызывающий сервис), возвращает
         (file_url presigned, object_key)."""
         await asyncio.to_thread(
             self._client.put_object,

@@ -14,10 +14,13 @@ import pytest
 from app.adapters.extraction import PyMuPdfExtractor, PythonDocxExtractor
 from app.adapters.render import DocxTplRenderer
 from app.domain.documents import RenderFormat
+from app.domain.errors import ConversionError
+from app.domain.files import MIME_DOCX
 from app.grpc.interceptors import AuthAndLoggingInterceptor
 from app.grpc.servicers.documents import DocumentsServicer
 from app.grpc.servicers.files import FilesServicer
 from app.grpc.servicers.stt import SttServicer
+from app.services.conversion_service import ConversionService
 from app.services.extraction_service import ExtractionService
 from app.services.render_service import RenderService
 from app.services.stt_service import SttService
@@ -67,6 +70,16 @@ class FakeUploader:
         return f"https://storage.public/{key}", key
 
 
+class FakePdfConverter:
+    """Реальный LibreOffice в юнит-тестах не поднимается (системный пакет есть
+    только в Docker-образе) — пустой вход имитирует повреждённый файл."""
+
+    def convert(self, data: bytes, source_suffix: str) -> bytes:
+        if not data:
+            raise ConversionError("empty source")
+        return b"%PDF-1.7 converted"
+
+
 def _make_pdf_bytes(text: str) -> bytes:
     doc = pymupdf.open()
     page = doc.new_page()
@@ -88,6 +101,7 @@ async def _start_server(downloader: FakeDownloader) -> tuple[grpc.aio.Server, in
     extraction_service = ExtractionService(
         downloader, PyMuPdfExtractor(), PythonDocxExtractor(), NeverCalledOcr()
     )
+    conversion_service = ConversionService(downloader, FakePdfConverter(), FakeUploader())
     stt_service = SttService(downloader, FakeSttProvider())
     render_service = RenderService(
         {RenderFormat.DOCX: DocxTplRenderer(), RenderFormat.PDF: DocxTplRenderer()},
@@ -95,7 +109,9 @@ async def _start_server(downloader: FakeDownloader) -> tuple[grpc.aio.Server, in
     )
 
     server = grpc.aio.server(interceptors=[AuthAndLoggingInterceptor(INTERNAL_SECRET)])
-    files_pb2_grpc.add_FilesServiceServicer_to_server(FilesServicer(extraction_service), server)
+    files_pb2_grpc.add_FilesServiceServicer_to_server(
+        FilesServicer(extraction_service, conversion_service), server
+    )
     stt_pb2_grpc.add_SttServiceServicer_to_server(SttServicer(stt_service), server)
     documents_pb2_grpc.add_DocumentsServiceServicer_to_server(
         DocumentsServicer(render_service), server
@@ -240,6 +256,35 @@ async def test_render_rejects_unspecified_format(channel: grpc.aio.Channel) -> N
     with pytest.raises(grpc.aio.AioRpcError) as exc_info:
         await stub.Render(
             documents_pb2.RenderRequest(title="T", sections=[]),
+            metadata=_auth_metadata(),
+        )
+
+    assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+async def test_convert_to_pdf_returns_object_key(
+    channel: grpc.aio.Channel, downloader: FakeDownloader
+) -> None:
+    downloader.content_by_url["https://x/template.docx"] = _make_docx_bytes("Договор")
+    stub = files_pb2_grpc.FilesServiceStub(channel)
+
+    response = await stub.ConvertToPdf(
+        files_pb2.ConvertToPdfRequest(file_url="https://x/template.docx", mime_type=MIME_DOCX),
+        metadata=_auth_metadata(),
+    )
+
+    assert response.object_key.startswith("converted/")
+    assert response.object_key.endswith(".pdf")
+
+
+async def test_convert_to_pdf_failed_conversion_is_invalid_argument(
+    channel: grpc.aio.Channel,
+) -> None:
+    stub = files_pb2_grpc.FilesServiceStub(channel)
+
+    with pytest.raises(grpc.aio.AioRpcError) as exc_info:
+        await stub.ConvertToPdf(
+            files_pb2.ConvertToPdfRequest(file_url="https://x/empty.docx", mime_type=MIME_DOCX),
             metadata=_auth_metadata(),
         )
 

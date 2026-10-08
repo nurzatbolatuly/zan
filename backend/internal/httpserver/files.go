@@ -3,7 +3,6 @@ package httpserver
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -38,48 +37,26 @@ func newFileAttachmentResponse(f domain.FileAttachment, url string) fileAttachme
 }
 
 // uploadFileHandler — POST /files/upload (zan-backend-tz-v2.md §3.3):
-// multipart-поле "file". Требует SessionAuth. maxSizeBytes — читается из
-// запроса до полного разбора multipart-тела (MaxBytesReader), чтобы
-// заведомо большой upload не тратил память на чтение целиком до проверки
-// размера — file.Service всё равно перепроверяет len(data) сам, это
-// защита раньше по стеку, не дублирование ради дублирования.
+// multipart-поле "file". Требует SessionAuth. Лимит размера — см.
+// readUploadedFile.
 func uploadFileHandler(svc *file.Service, maxSizeBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// MaxBytesReader ловит переполнение уже на этапе разбора multipart-тела
-		// (c.FormFile ниже вызывает ParseMultipartForm) — *http.MaxBytesError
-		// отличает "тело больше лимита" от прочих ошибок парсинга.
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSizeBytes+1)
-
-		fh, err := c.FormFile("file")
-		if err != nil {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err, &maxBytesErr) {
-				writeError(c, fileTooLargeError(maxSizeBytes))
-				return
-			}
+		upload, apiErr := readUploadedFile(c, "file", maxSizeBytes)
+		if apiErr != nil {
+			writeError(c, apiErr)
+			return
+		}
+		if upload == nil {
 			writeError(c, invalidRequestError("Missing multipart field \"file\""))
 			return
 		}
 
-		opened, err := fh.Open()
-		if err != nil {
-			writeError(c, apierror.Internal())
-			return
-		}
-		data, err := io.ReadAll(opened)
-		_ = opened.Close()
-		if err != nil {
-			writeError(c, apierror.Internal())
-			return
-		}
-
-		mimeType := fh.Header.Get("Content-Type")
 		sess := sessionFromGin(c)
 		created, url, err := svc.Upload(c.Request.Context(), file.UploadRequest{
 			SessionID:    sess.ID,
-			OriginalName: fh.Filename,
-			MimeType:     mimeType,
-			Data:         data,
+			OriginalName: upload.Name,
+			MimeType:     upload.ContentType,
+			Data:         upload.Data,
 		})
 		if err != nil {
 			writeFileError(c, err, maxSizeBytes)

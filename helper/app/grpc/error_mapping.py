@@ -10,6 +10,7 @@ import grpc
 
 from app.core.logging import get_logger
 from app.domain.errors import (
+    ConversionError,
     DownloadError,
     ExtractionError,
     RenderError,
@@ -21,7 +22,12 @@ from app.domain.errors import (
 # повторной попыткой того же запроса (BACKEND_PLAN.md §3.3: "невалидный
 # запрос — не ретраится"). UntrustedFileURLError — отдельная ветка ниже,
 # логируется как security-инцидент, не просто WARN.
-_INVALID_ARGUMENT_ERRORS: tuple[type[Exception], ...] = (ExtractionError, SttError, RenderError)
+_INVALID_ARGUMENT_ERRORS: tuple[type[Exception], ...] = (
+    ExtractionError,
+    SttError,
+    RenderError,
+    ConversionError,
+)
 
 
 async def abort_for_exception(

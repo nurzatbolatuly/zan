@@ -9,12 +9,13 @@ interface SettingsDictionary {
     subtitle: string;
     tabPrompts: string;
     tabTariffs: string;
+    tabTemplates: string;
     tabAnalytics: string;
     accessDeniedTitle: string;
     accessDeniedBody: string;
     save: string;
     cancel: string;
-    /** Общая ошибка/повтор для всех трёх вкладок (Stage 6 — все читают `/admin/*`). */
+    /** Общая ошибка/повтор для всех вкладок (все читают `/admin/*`). */
     loadError: string;
     retry: string;
   };
@@ -74,6 +75,53 @@ interface SettingsDictionary {
     nameRequiredError: string;
     atLeastOneItemError: string;
   };
+  templates: {
+    typesTitle: string;
+    typesSub: string;
+    addType: string;
+    newTypeTitle: string;
+    renameTypeTitle: string;
+    fTypeName: string;
+    typeNameRequiredError: string;
+    typeSavedToast: string;
+    typeDeleteConfirmTitle: string;
+    typeDeleteConfirmMessage: string;
+    typeDeletedToast: string;
+    /** "3 шаблона" — подпись строки типа в справочнике. */
+    templatesCount: (count: number) => string;
+    templatesTitle: string;
+    templatesSub: string;
+    uploadTemplate: string;
+    noTypesHint: string;
+    emptyTitle: string;
+    emptyDescription: string;
+    newTemplateTitle: string;
+    editTemplateTitle: string;
+    fTitle: string;
+    fType: string;
+    fTypePlaceholder: string;
+    fFile: string;
+    chooseFile: string;
+    replaceFile: string;
+    /** maxSize — уже отформатированный лимит (`formatFileSize`, тот же вид, что в чате). */
+    fileHint: (maxSize: string) => string;
+    titleRequiredError: string;
+    typeRequiredError: string;
+    fileRequiredError: string;
+    unsupportedFileError: string;
+    fileTooLargeError: (maxSize: string) => string;
+    /** Пока идёт сохранение: DOCX конвертируется в PDF на бэке синхронно. */
+    savingNote: string;
+    templateSavedToast: string;
+    templateDeleteConfirmTitle: string;
+    templateDeleteConfirmMessage: string;
+    templateDeletedToast: string;
+    viewAction: string;
+    editAction: string;
+    deleteAction: string;
+    openInNewTab: string;
+    close: string;
+  };
   analytics: {
     title: string;
     subtitle: string;
@@ -88,6 +136,9 @@ interface SettingsDictionary {
   };
 }
 
+/** Подписи вкладки «Шаблоны» — передаются её компонентам одним пропом `labels`. */
+export type TemplatesDictionary = SettingsDictionary["templates"];
+
 // Формы declension — те же, что в features/tariffs/locales.ts (Stage 3), это
 // один и тот же фиксированный набор из двух услуг (qa/doc), не два независимых источника правды.
 const QA_FORMS_RU: readonly [string, string, string] = ["запрос", "запроса", "запросов"];
@@ -95,6 +146,11 @@ const DOC_FORMS_RU: readonly [string, string, string] = [
   "документ",
   "документа",
   "документов",
+];
+const TEMPLATE_FORMS_RU: readonly [string, string, string] = [
+  "шаблон",
+  "шаблона",
+  "шаблонов",
 ];
 
 // Строки — 1:1 из прототипа (Zan.dc.html:599-619 ru / 673-693 kz), плюс новые
@@ -105,9 +161,10 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
     common: {
       title: "Настройки",
       subtitle:
-        "Системные промпты агентов и тарифы. Раздел будет скрыт под роль администратора.",
+        "Системные промпты агентов, тарифы и шаблоны документов. Раздел будет скрыт под роль администратора.",
       tabPrompts: "Промпты",
       tabTariffs: "Тарифы",
+      tabTemplates: "Шаблоны",
       tabAnalytics: "Аналитика",
       accessDeniedTitle: "Доступ ограничен",
       accessDeniedBody: "Этот раздел доступен только администраторам.",
@@ -176,6 +233,53 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       nameRequiredError: "Укажите название тарифа",
       atLeastOneItemError: "Добавьте хотя бы одну услугу в тариф",
     },
+    templates: {
+      typesTitle: "Типы документов",
+      typesSub: "Справочник, к которому относится каждый шаблон.",
+      addType: "Добавить тип",
+      newTypeTitle: "Новый тип документа",
+      renameTypeTitle: "Переименовать тип",
+      fTypeName: "НАЗВАНИЕ ТИПА",
+      typeNameRequiredError: "Укажите название типа",
+      typeSavedToast: "Тип документа сохранён",
+      typeDeleteConfirmTitle: "Удалить тип документа?",
+      typeDeleteConfirmMessage:
+        "Тип исчезнет из справочника. Удалить можно только тип, у которого нет шаблонов.",
+      typeDeletedToast: "Тип документа удалён",
+      templatesCount: (count) => `${count} ${pluralRu(count, TEMPLATE_FORMS_RU)}`,
+      templatesTitle: "Шаблоны документов",
+      templatesSub: "Образцы в PDF или DOCX. Открываются как PDF — только для чтения.",
+      uploadTemplate: "Загрузить шаблон",
+      noTypesHint: "Сначала добавьте хотя бы один тип документа.",
+      emptyTitle: "Шаблонов пока нет",
+      emptyDescription:
+        "Загрузите первый образец: договор, приказ, исковое заявление и т. д.",
+      newTemplateTitle: "Новый шаблон",
+      editTemplateTitle: "Изменить шаблон",
+      fTitle: "НАЗВАНИЕ ШАБЛОНА",
+      fType: "ТИП ДОКУМЕНТА",
+      fTypePlaceholder: "Выберите тип",
+      fFile: "ФАЙЛ",
+      chooseFile: "Выбрать файл",
+      replaceFile: "Заменить файл",
+      fileHint: (maxSize) => `PDF или DOCX, до ${maxSize}`,
+      titleRequiredError: "Укажите название шаблона",
+      typeRequiredError: "Выберите тип документа",
+      fileRequiredError: "Выберите файл",
+      unsupportedFileError: "Подходят только файлы PDF и DOCX",
+      fileTooLargeError: (maxSize) => `Файл больше ${maxSize}`,
+      savingNote: "Сохраняем. DOCX переводится в PDF — это займёт несколько секунд.",
+      templateSavedToast: "Шаблон сохранён",
+      templateDeleteConfirmTitle: "Удалить шаблон?",
+      templateDeleteConfirmMessage:
+        "Шаблон и его файл будут удалены. Действие нельзя отменить.",
+      templateDeletedToast: "Шаблон удалён",
+      viewAction: "Открыть",
+      editAction: "Изменить",
+      deleteAction: "Удалить",
+      openInNewTab: "Открыть в новой вкладке",
+      close: "Закрыть",
+    },
     analytics: {
       title: "Аналитика обращений",
       subtitle: "Данные показаны за последние 30 дней.",
@@ -197,9 +301,10 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
     common: {
       title: "Баптаулар",
       subtitle:
-        "Агенттердің жүйелік промпттары және тарифтер. Бөлім әкімші рөліне жабылады.",
+        "Агенттердің жүйелік промпттары, тарифтер және құжат үлгілері. Бөлім әкімші рөліне жабылады.",
       tabPrompts: "Промпттар",
       tabTariffs: "Тарифтер",
+      tabTemplates: "Үлгілер",
       tabAnalytics: "Аналитика",
       accessDeniedTitle: "Қол жеткізу шектелген",
       accessDeniedBody: "Бұл бөлім тек әкімшілерге қолжетімді.",
@@ -267,6 +372,52 @@ export const settingsDictionary: Record<Lang, SettingsDictionary> = {
       savedToast: "Тариф сақталды",
       nameRequiredError: "Тариф атауын көрсетіңіз",
       atLeastOneItemError: "Тарифке кемінде бір қызмет қосыңыз",
+    },
+    templates: {
+      typesTitle: "Құжат түрлері",
+      typesSub: "Әр үлгі жататын анықтамалық.",
+      addType: "Түр қосу",
+      newTypeTitle: "Жаңа құжат түрі",
+      renameTypeTitle: "Түрдің атауын өзгерту",
+      fTypeName: "ТҮР АТАУЫ",
+      typeNameRequiredError: "Түр атауын көрсетіңіз",
+      typeSavedToast: "Құжат түрі сақталды",
+      typeDeleteConfirmTitle: "Құжат түрін жою керек пе?",
+      typeDeleteConfirmMessage:
+        "Түр анықтамалықтан жойылады. Тек үлгісі жоқ түрді жоюға болады.",
+      typeDeletedToast: "Құжат түрі жойылды",
+      templatesCount: (count) => `${count} үлгі`,
+      templatesTitle: "Құжат үлгілері",
+      templatesSub: "PDF немесе DOCX үлгілері. PDF ретінде тек оқу үшін ашылады.",
+      uploadTemplate: "Үлгі жүктеу",
+      noTypesHint: "Алдымен кемінде бір құжат түрін қосыңыз.",
+      emptyTitle: "Әзірге үлгілер жоқ",
+      emptyDescription: "Алғашқы үлгіні жүктеңіз: шарт, бұйрық, талап арыз және т. б.",
+      newTemplateTitle: "Жаңа үлгі",
+      editTemplateTitle: "Үлгіні өзгерту",
+      fTitle: "ҮЛГІ АТАУЫ",
+      fType: "ҚҰЖАТ ТҮРІ",
+      fTypePlaceholder: "Түрін таңдаңыз",
+      fFile: "ФАЙЛ",
+      chooseFile: "Файл таңдау",
+      replaceFile: "Файлды ауыстыру",
+      fileHint: (maxSize) => `PDF немесе DOCX, ең көбі ${maxSize}`,
+      titleRequiredError: "Үлгі атауын көрсетіңіз",
+      typeRequiredError: "Құжат түрін таңдаңыз",
+      fileRequiredError: "Файлды таңдаңыз",
+      unsupportedFileError: "Тек PDF және DOCX файлдары жарамды",
+      fileTooLargeError: (maxSize) => `Файл ${maxSize} шегінен асады`,
+      savingNote: "Сақталуда. DOCX PDF-ке айналдырылады — бұл бірнеше секунд алады.",
+      templateSavedToast: "Үлгі сақталды",
+      templateDeleteConfirmTitle: "Үлгіні жою керек пе?",
+      templateDeleteConfirmMessage:
+        "Үлгі және оның файлы жойылады. Бұл әрекетті болдырмау мүмкін емес.",
+      templateDeletedToast: "Үлгі жойылды",
+      viewAction: "Ашу",
+      editAction: "Өзгерту",
+      deleteAction: "Жою",
+      openInNewTab: "Жаңа қойындыда ашу",
+      close: "Жабу",
     },
     analytics: {
       title: "Өтініштер аналитикасы",
